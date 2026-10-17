@@ -1,0 +1,12 @@
+{
+	"my-team": {
+		"name": "Team prototype",
+		"origins": ["https://app.example.com", "http://localhost:*"],
+		"members": ["*@convex.works", "*@partner.example"]
+	},
+	"convex-works": {
+		"name": "Convex Works",
+		"origins": ["https://*.convex.works"],
+		"members": ["group:convex-works"]
+	}
+}

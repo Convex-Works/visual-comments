@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Plain page – visual-comments example</title>
+	<style>
+		body { margin: 0; font: 15px/1.5 Georgia, serif; color: #1f2937; background: #fafaf9; }
+		header { position: sticky; top: 0; display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 2rem; background: #111827; color: #f9fafb; z-index: 1; }
+		header a { color: inherit; text-decoration: none; }
+		main { max-width: 56rem; margin: 2rem auto; padding: 0 2rem; }
+		.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+		.card { padding: 1rem; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; }
+		button { font: inherit; padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; }
+		table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; background: #fff; }
+		th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; }
+		.tall { height: 120vh; margin-top: 2rem; padding: 1rem; background: linear-gradient(#fff, #e7e5e4); border-radius: 10px; }
+	</style>
+	<script src="{{SERVER}}/v1/visual-comments.js" data-space="demo" defer></script>
+</head>
+<body>
+	<header><strong>Acme</strong><a href="./">Overview</a><a href="./canvas.html">Canvas example</a><a href="./other.html">Another page</a></header>
+	<main>
+		<h1>Quarterly overview</h1>
+		<p>Every page of a site can take comments: press <kbd>C</kbd> or the speech bubble, then click anything.</p>
+		<div class="cards">
+			<div class="card"><h2>Revenue</h2><p>$1.2M, up 12%.</p><button onclick="alert('The page’s own button')">Details</button></div>
+			<div class="card"><h2>Customers</h2><p>482 active accounts.</p><button>Export</button></div>
+			<div class="card"><h2>Churn</h2><p>2.1% this quarter.</p><button>Compare</button></div>
+		</div>
+		<table>
+			<thead><tr><th>Region</th><th>Revenue</th><th>Growth</th></tr></thead>
+			<tbody>
+				<tr><td>Europe</td><td>$410k</td><td>+9%</td></tr>
+				<tr><td>North America</td><td>$620k</td><td>+15%</td></tr>
+				<tr><td>Asia</td><td>$170k</td><td>+8%</td></tr>
+			</tbody>
+		</table>
+		<div class="tall"><h2>Long content</h2><p>Pins on this page scroll with it.</p></div>
+		<p id="end">The end of the page.</p>
+	</main>
+</body>
+</html>

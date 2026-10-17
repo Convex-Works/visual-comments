@@ -1,0 +1,15 @@
+{
+	"name": "visual-comments-workspace",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@12.4.1",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "pnpm -F visual-comments build",
+		"dev": "pnpm -F visual-comments build && pnpm --parallel -F visual-comments -F @visual-comments/server dev",
+		"test": "pnpm -r test",
+		"check": "pnpm -r check"
+	}
+}

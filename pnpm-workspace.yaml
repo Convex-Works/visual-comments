@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+
+# Its prebuilt binaries are enough; the install script only rebuilds them.
+allowBuilds:
+  "@parcel/watcher": false
