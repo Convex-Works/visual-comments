@@ -1,4 +1,4 @@
-import { mount, unmount } from 'svelte';
+import { mount, unmount, untrack } from 'svelte';
 import { aimAt, type Aim } from './core/aim.js';
 import { Session } from './core/session.js';
 import { discover, inside, surfaceAt, toClient, type Rect, type Surface } from './core/surfaces.js';
@@ -180,7 +180,8 @@ export class VisualComments {
 
 	/** Changes options after creation, e.g. when a host's view mounts and can show threads. */
 	configure(options: Partial<VisualCommentsOptions>) {
-		this.options = { ...this.options, ...options };
+		// Hosts call this from their own effects, which must not depend on the options.
+		this.options = { ...untrack(() => this.options), ...options };
 		this.schedule();
 	}
 
@@ -393,6 +394,8 @@ export class VisualComments {
 		const doc = this.doc;
 		this.surfaces = discover(doc, { ours: this.ours, documentOf: this.options.documentOf });
 		this.page = pageOf(this.options.page);
+		// A new comment on a surface that has gone, like a frame the viewer left, goes with it.
+		if (this.draft && !this.surface(this.draft.surface)) this.draft = undefined;
 
 		const docs = new Set(this.surfaces.map((surface) => surface.doc).filter((d): d is Document => Boolean(d) && d !== doc));
 		for (const frame of docs) this.watchFrame(frame);
@@ -500,7 +503,12 @@ export class VisualComments {
 			this.toggle();
 			return;
 		}
-		if (!this.active || this.fromUs(event)) return;
+		if (this.fromUs(event)) return;
+		if (!this.active) {
+			// Pins show outside comment mode too; a click away closes the thread one opened.
+			if (this.openId !== undefined) this.openThread(undefined);
+			return;
+		}
 		const surface = this.surfaceAt(event.clientX, event.clientY);
 		if (!surface) {
 			// A click away from the comment: keep an unsent one, drop an empty one, close an open thread.
