@@ -1,0 +1,13 @@
+{
+	"name": "@visual-comments/examples",
+	"private": true,
+	"type": "module",
+	"description": "A site with its own server, sign-in and comments, for development.",
+	"scripts": {
+		"dev": "node --watch server.ts"
+	},
+	"dependencies": {
+		"@convex-works/sign-in": "link:../../sign-in",
+		"visual-comments": "workspace:*"
+	}
+}

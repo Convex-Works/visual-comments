@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -35,40 +35,24 @@ export interface NewImage {
 	data: Uint8Array;
 }
 
-/** A sign-in on its way through the identity provider. */
-export interface Login {
-	state: string;
-	/** Hash of the value in the browser's sign-in cookie, so only that browser can finish it. */
-	binding: string;
-	nonce: string;
-	verifier: string;
-	space: string;
-	/** Where the token goes: the opener's origin (popup) or the address to return to (redirect). */
-	mode: 'popup' | 'redirect';
-	target: string;
-}
-
 /** Images uploaded but never sent with a comment are dropped after this long. */
 const UNSENT_IMAGE_MS = 24 * 60 * 60 * 1000;
-/** A sign-in token lasts this long after it was last used. */
-export const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
-/** A sign-in must come back from the identity provider within this time. */
-const LOGIN_MS = 10 * 60 * 1000;
 
 type Row = Record<string, string | number | null>;
-
-const hash = (value: string) => createHash('sha256').update(value).digest('base64url');
 
 // Each entry moves the database up one version (PRAGMA user_version).
 const MIGRATIONS: string[][] = [
 	[
+		// People as each space's site last described them. Sites only change their own space's people.
 		`CREATE TABLE users (
-			sub TEXT PRIMARY KEY,
+			space TEXT NOT NULL,
+			sub TEXT NOT NULL,
 			name TEXT NOT NULL,
 			email TEXT,
 			picture TEXT,
-			seen_at INTEGER NOT NULL
-		)`,
+			seen_at INTEGER NOT NULL,
+			PRIMARY KEY (space, sub)
+		) WITHOUT ROWID`,
 		// The last thread number given out in each space, so numbers are never reused.
 		`CREATE TABLE counters (
 			space TEXT PRIMARY KEY,
@@ -87,16 +71,16 @@ const MIGRATIONS: string[][] = [
 			-- The element under the pin, and what the host said about the place, as JSON.
 			anchor TEXT,
 			context TEXT NOT NULL DEFAULT '{}',
-			author TEXT NOT NULL REFERENCES users(sub),
+			author TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			resolved_at INTEGER,
-			resolved_by TEXT REFERENCES users(sub),
+			resolved_by TEXT,
 			UNIQUE (space, number)
 		)`,
 		`CREATE TABLE comments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-			author TEXT NOT NULL REFERENCES users(sub),
+			author TEXT NOT NULL,
 			body TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			edited_at INTEGER
@@ -105,7 +89,7 @@ const MIGRATIONS: string[][] = [
 		// The newest comment each person has seen in a thread.
 		`CREATE TABLE reads (
 			thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-			user TEXT NOT NULL REFERENCES users(sub),
+			user TEXT NOT NULL,
 			comment INTEGER NOT NULL,
 			PRIMARY KEY (thread, user)
 		) WITHOUT ROWID`,
@@ -115,32 +99,14 @@ const MIGRATIONS: string[][] = [
 			key TEXT NOT NULL,
 			space TEXT NOT NULL,
 			comment INTEGER REFERENCES comments(id) ON DELETE CASCADE,
-			author TEXT NOT NULL REFERENCES users(sub),
+			author TEXT NOT NULL,
 			type TEXT NOT NULL,
 			width INTEGER NOT NULL,
 			height INTEGER NOT NULL,
 			data BLOB NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		`CREATE INDEX images_by_comment ON images(comment, id)`,
-		// Sign-in tokens, by their hash. A token belongs to one space.
-		`CREATE TABLE sessions (
-			token TEXT PRIMARY KEY,
-			sub TEXT NOT NULL REFERENCES users(sub),
-			space TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			used_at INTEGER NOT NULL
-		) WITHOUT ROWID`,
-		`CREATE TABLE logins (
-			state TEXT PRIMARY KEY,
-			binding TEXT NOT NULL,
-			nonce TEXT NOT NULL,
-			verifier TEXT NOT NULL,
-			space TEXT NOT NULL,
-			mode TEXT NOT NULL,
-			target TEXT NOT NULL,
-			created_at INTEGER NOT NULL
-		) WITHOUT ROWID`
+		`CREATE INDEX images_by_comment ON images(comment, id)`
 	]
 ];
 
@@ -216,75 +182,11 @@ export class CommentStore {
 		this.events.dispatchEvent(new CustomEvent('change', { detail: space }));
 	}
 
-	saveUser(user: Viewer, now = Date.now()) {
-		this.db.prepare(`INSERT INTO users (sub, name, email, picture, seen_at) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (sub) DO UPDATE SET name = excluded.name, email = coalesce(excluded.email, users.email),
+	saveUser(space: string, user: Viewer, now = Date.now()) {
+		this.db.prepare(`INSERT INTO users (space, sub, name, email, picture, seen_at) VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT (space, sub) DO UPDATE SET name = excluded.name, email = coalesce(excluded.email, users.email),
 			picture = excluded.picture, seen_at = excluded.seen_at`)
-			.run(user.sub, user.name, user.email ?? null, user.picture ?? null, now);
-	}
-
-	// Sign-in.
-
-	/** A new sign-in token for the person in one space. Only its hash is kept. */
-	createSession(user: Viewer, space: string): string {
-		const token = randomBytes(32).toString('base64url');
-		const now = Date.now();
-		this.transaction(() => {
-			this.saveUser(user, now);
-			this.db.prepare('DELETE FROM sessions WHERE used_at < ?').run(now - SESSION_MS);
-			this.db.prepare('INSERT INTO sessions (token, sub, space, created_at, used_at) VALUES (?, ?, ?, ?, ?)')
-				.run(hash(token), user.sub, space, now, now);
-		});
-		return token;
-	}
-
-	/** The person a token signs in, if it is for this space and still valid. Keeps it alive while used. */
-	session(token: string, space: string): Viewer | null {
-		this.ensureSameFile();
-		const key = hash(token);
-		const row = this.db.prepare(`SELECT s.used_at, s.space, u.sub, u.name, u.email, u.picture
-			FROM sessions s JOIN users u ON u.sub = s.sub WHERE s.token = ?`).get(key) as Row | undefined;
-		const now = Date.now();
-		if (!row || row.space !== space || (row.used_at as number) < now - SESSION_MS) return null;
-		// Record use at most once a minute; it only extends the expiry.
-		if ((row.used_at as number) < now - 60_000) {
-			this.db.prepare('UPDATE sessions SET used_at = ? WHERE token = ?').run(now, key);
-		}
-		return {
-			sub: row.sub as string,
-			name: row.name as string,
-			...(row.email ? { email: row.email as string } : {}),
-			...(row.picture ? { picture: row.picture as string } : {})
-		};
-	}
-
-	endSession(token: string) {
-		this.ensureSameFile();
-		this.db.prepare('DELETE FROM sessions WHERE token = ?').run(hash(token));
-	}
-
-	saveLogin(login: Login) {
-		const now = Date.now();
-		this.transaction(() => {
-			this.db.prepare('DELETE FROM logins WHERE created_at < ?').run(now - LOGIN_MS);
-			this.db.prepare(`INSERT INTO logins (state, binding, nonce, verifier, space, mode, target, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-				.run(login.state, hash(login.binding), login.nonce, login.verifier, login.space, login.mode, login.target, now);
-		});
-	}
-
-	/** The sign-in started with this state, once: it is used up. Null if unknown, expired or from another browser. */
-	takeLogin(state: string, binding: string | undefined): Login | null {
-		const row = this.transaction(() => {
-			const row = this.db.prepare('SELECT * FROM logins WHERE state = ?').get(state) as Row | undefined;
-			if (row) this.db.prepare('DELETE FROM logins WHERE state = ?').run(state);
-			return row;
-		});
-		if (!row || !binding || row.binding !== hash(binding) || (row.created_at as number) < Date.now() - LOGIN_MS) return null;
-		return {
-			state, binding, nonce: row.nonce as string, verifier: row.verifier as string, space: row.space as string,
-			mode: row.mode as Login['mode'], target: row.target as string
-		};
+			.run(space, user.sub, user.name, user.email ?? null, user.picture ?? null, now);
 	}
 
 	// Comments.
@@ -323,7 +225,7 @@ export class CommentStore {
 		const now = Date.now();
 		const key = randomBytes(16).toString('base64url');
 		const id = this.transaction(() => {
-			this.saveUser(user, now);
+			this.saveUser(space, user, now);
 			this.db.prepare('DELETE FROM images WHERE comment IS NULL AND created_at < ?').run(now - UNSENT_IMAGE_MS);
 			const { lastInsertRowid } = this.db.prepare(
 				'INSERT INTO images (key, space, author, type, width, height, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -333,10 +235,10 @@ export class CommentStore {
 		return { id, key, width: image.width, height: image.height };
 	}
 
-	/** An image by its address. Its key stands in for a sign-in, so it can be shown in an `<img>`. */
-	image(id: number, key: string): { type: string; data: Uint8Array } {
+	/** An image of the space by its address. */
+	image(space: string, id: number, key: string): { type: string; data: Uint8Array } {
 		this.ensureSameFile();
-		const row = this.db.prepare('SELECT type, data, key FROM images WHERE id = ?').get(id) as
+		const row = this.db.prepare('SELECT type, data, key FROM images WHERE id = ? AND space = ?').get(id, space) as
 			| { type: string; data: Uint8Array; key: string }
 			| undefined;
 		if (!row || row.key !== key) throw new CommentError(404, 'This image no longer exists.');
@@ -359,9 +261,9 @@ export class CommentStore {
 		const where = only === undefined ? '' : 'AND t.number = ?';
 		const params: (string | number)[] = only === undefined ? [space] : [space, only];
 		const users = new Map<string, Author>();
-		const userRows = this.db.prepare(`SELECT sub, name, picture FROM users WHERE sub IN (
+		const userRows = this.db.prepare(`SELECT sub, name, picture FROM users WHERE space = ? AND sub IN (
 			SELECT c.author FROM comments c JOIN threads t ON t.id = c.thread WHERE t.space = ?
-			UNION SELECT resolved_by FROM threads WHERE space = ?)`).all(space, space) as Row[];
+			UNION SELECT resolved_by FROM threads WHERE space = ?)`).all(space, space, space) as Row[];
 		for (const row of userRows) {
 			users.set(row.sub as string, {
 				sub: row.sub as string,
@@ -428,7 +330,7 @@ export class CommentStore {
 	createThread(space: string, user: Viewer, input: NewThread): CommentThread {
 		const now = Date.now();
 		const number = this.transaction(() => {
-			this.saveUser(user, now);
+			this.saveUser(space, user, now);
 			const { threads } = this.db.prepare(`INSERT INTO counters (space, threads) VALUES (?, 1)
 				ON CONFLICT (space) DO UPDATE SET threads = threads + 1 RETURNING threads`).get(space) as { threads: number };
 			const { lastInsertRowid } = this.db.prepare(`INSERT INTO threads
@@ -448,7 +350,7 @@ export class CommentStore {
 		const now = Date.now();
 		this.transaction(() => {
 			const { id } = this.requireThread(space, number);
-			this.saveUser(user, now);
+			this.saveUser(space, user, now);
 			this.addComment(id, space, user.sub, body, images, now);
 			// Replying to a resolved thread reopens it.
 			this.db.prepare('UPDATE threads SET resolved_at = NULL, resolved_by = NULL WHERE id = ?').run(id);
@@ -461,7 +363,7 @@ export class CommentStore {
 	editComment(space: string, user: Viewer, commentId: number, body: string, images?: number[]): CommentThread {
 		const comment = this.requireOwnComment(space, user, commentId);
 		this.transaction(() => {
-			this.saveUser(user, Date.now());
+			this.saveUser(space, user, Date.now());
 			if (images) this.setImages(commentId, space, user.sub, images);
 			const { count } = this.db.prepare('SELECT count(*) AS count FROM images WHERE comment = ?').get(commentId) as { count: number };
 			if (!body && !count) throw new CommentError(400, 'A comment needs some text or an image.');
@@ -495,7 +397,7 @@ export class CommentStore {
 	resolve(space: string, user: Viewer, number: number, resolved: boolean): CommentThread {
 		this.transaction(() => {
 			const { id } = this.requireThread(space, number);
-			this.saveUser(user, Date.now());
+			this.saveUser(space, user, Date.now());
 			this.db.prepare('UPDATE threads SET resolved_at = ?, resolved_by = ? WHERE id = ?')
 				.run(resolved ? Date.now() : null, resolved ? user.sub : null, id);
 		});
@@ -507,7 +409,7 @@ export class CommentStore {
 	markRead(space: string, user: Viewer, number: number, read: boolean): CommentThread {
 		this.transaction(() => {
 			const { id } = this.requireThread(space, number);
-			this.saveUser(user, Date.now());
+			this.saveUser(space, user, Date.now());
 			if (read) {
 				const { last } = this.db.prepare('SELECT max(id) AS last FROM comments WHERE thread = ?').get(id) as { last: number };
 				this.markReadUpTo(id, user.sub, last);

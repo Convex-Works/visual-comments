@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { CommentsApi } from './api.ts';
-import { Auth, type AuthConfig } from './auth.ts';
 import type { Spaces } from './spaces.ts';
 import type { CommentStore } from './store.ts';
 
-export interface AppConfig extends AuthConfig {
+export interface AppConfig {
 	store: CommentStore;
 	spaces: Spaces;
 	/** The built client, served at `/v1/`. */
@@ -24,20 +23,19 @@ const TYPES: Record<string, string> = {
 /** The whole server as one fetch-style handler. */
 export function createApp(config: AppConfig) {
 	const api = new CommentsApi(config.store, config.spaces);
-	const auth = new Auth(config, config.store, config.spaces);
 
 	return async (request: Request): Promise<Response> => {
 		const url = new URL(request.url);
 		if (url.pathname === '/healthz') return new Response('ok', { headers: { 'Cache-Control': 'no-store' } });
 		if (config.widgetDir && /^\/v1\/visual-comments\.js(\.map)?$/.test(url.pathname)) {
 			return (await file(config.widgetDir, url.pathname.slice('/v1/'.length), {
-				// Any site may load the script; what it can do is limited by the spaces.
+				// Any site may load the script; it talks to the site's own server.
 				'Access-Control-Allow-Origin': '*',
 				'Cross-Origin-Resource-Policy': 'cross-origin',
 				'Cache-Control': 'public, max-age=300'
 			})) ?? notFound();
 		}
-		return (await auth.handle(request, url)) ?? (await api.handle(request, url)) ?? notFound();
+		return (await api.handle(request, url)) ?? notFound();
 	};
 }
 

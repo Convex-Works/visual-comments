@@ -1,4 +1,4 @@
-import type { Session } from './session.js';
+import type { Api } from './api.js';
 import type {
 	Comment, CommentImage, CommentThread, CommentsSnapshot, NewThreadInput, Viewer
 } from '../shared/types.js';
@@ -19,14 +19,14 @@ export class Threads {
 	/** Ticks every 30 seconds so relative times stay current. */
 	now = $state(Date.now());
 
-	private session: Session;
+	private api: Api;
 	private refreshing?: Promise<void>;
 	private queued = false;
 	private listening?: AbortController;
 	private nextPending = -1;
 
-	constructor(session: Session) {
-		this.session = session;
+	constructor(api: Api) {
+		this.api = api;
 	}
 
 	get unreadCount(): number {
@@ -34,24 +34,13 @@ export class Threads {
 	}
 
 	start() {
-		const takeError = () => {
-			if (this.session.error) this.error = this.session.error;
-			this.session.error = null;
-		};
-		takeError();
 		void this.refresh();
 		const onfocus = () => { void this.refresh(); };
 		window.addEventListener('focus', onfocus);
 		const timer = setInterval(() => { this.now = Date.now(); }, 30_000);
-		const stop = this.session.onChange(() => {
-			takeError();
-			this.stopListening();
-			void this.refresh();
-		});
 		return () => {
 			window.removeEventListener('focus', onfocus);
 			clearInterval(timer);
-			stop();
 			this.stopListening();
 		};
 	}
@@ -64,10 +53,9 @@ export class Threads {
 		}
 		this.refreshing = (async () => {
 			try {
-				const response = await this.session.fetch('');
+				const response = await this.api.fetch('');
 				if (!response.ok) throw new Error();
 				const snapshot = (await response.json()) as CommentsSnapshot;
-				this.session.expired(snapshot.viewer);
 				this.viewer = snapshot.viewer;
 				this.spaceName = snapshot.space.name;
 				// Keep replies that are still on their way to the server.
@@ -77,6 +65,7 @@ export class Threads {
 					return waiting?.length ? { ...thread, comments: [...thread.comments, ...waiting] } : thread;
 				});
 				if (this.viewer) this.listen();
+				else this.stopListening();
 			} catch {
 				// Keep what is shown; the next event or focus retries.
 			} finally {
@@ -103,9 +92,9 @@ export class Threads {
 		this.listening = controller;
 		void (async () => {
 			let connected = false;
-			while (!controller.signal.aborted && this.session.token) {
+			while (!controller.signal.aborted && this.viewer) {
 				try {
-					const response = await this.session.fetch('/events', { signal: controller.signal });
+					const response = await this.api.fetch('/events', { signal: controller.signal });
 					if (!response.ok || !response.body) break;
 					if (connected) void this.refresh();
 					connected = true;
@@ -132,7 +121,7 @@ export class Threads {
 	}
 
 	private async request(method: string, path: string, body?: unknown): Promise<Result> {
-		const response = await this.session.fetch(path, {
+		const response = await this.api.fetch(path, {
 			method,
 			headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
 			body: body === undefined ? undefined : JSON.stringify(body)
@@ -171,12 +160,12 @@ export class Threads {
 	}
 
 	imageUrl(image: CommentImage) {
-		return `${this.session.server}/v1/images/${image.id}/${image.key}`;
+		return `${this.api.endpoint}/images/${image.id}/${image.key}`;
 	}
 
 	/** Uploads an image for a comment being written. Send its id with the comment. */
 	async upload(file: Blob, width: number, height: number): Promise<CommentImage> {
-		const response = await this.session.fetch(`/images?width=${width}&height=${height}`, {
+		const response = await this.api.fetch(`/images?width=${width}&height=${height}`, {
 			method: 'POST',
 			headers: { 'Content-Type': file.type },
 			body: file

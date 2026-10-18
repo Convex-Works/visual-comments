@@ -7,17 +7,19 @@ import { after, test } from 'node:test';
 import { createApp } from '../src/app.ts';
 import { Spaces } from '../src/spaces.ts';
 import { CommentStore } from '../src/store.ts';
+import { USER_HEADER } from '../../client/src/lib/shared/protocol.ts';
 
 const site = 'https://app.example';
 const server = 'https://comments.example';
+const secrets = { app: 'app-secret-for-tests-only-0123456789', other: 'other-secret-for-tests-only-0123456789' };
 const people = {
 	ada: { sub: 'user-ada', name: 'Ada Example', email: 'ada@example.com', picture: 'https://images.example/ada.png' },
 	ben: { sub: 'user-ben', name: 'Ben Example', email: 'ben@example.com' }
 };
 type Person = keyof typeof people;
 const spaces = Spaces.parse({
-	app: { name: 'App', origins: [site, 'https://*.preview.example'], members: ['*@example.com'] },
-	other: { name: 'Other', origins: ['https://other.example'], members: ['*'] }
+	app: { name: 'App', secret: secrets.app },
+	other: { name: 'Other', secret: secrets.other }
 });
 const stores: CommentStore[] = [];
 after(() => { for (const store of stores) store.close(); });
@@ -25,22 +27,20 @@ after(() => { for (const store of stores) store.close(); });
 function setup(database = ':memory:') {
 	const store = new CommentStore(database);
 	stores.push(store);
-	const app = createApp({ store, spaces, publicUrl: server });
-	const tokens = new Map<string, string>();
-	const token = (as: Person, space = 'app') => {
-		const key = `${as}:${space}`;
-		if (!tokens.has(key)) tokens.set(key, store.createSession(people[as], space));
-		return tokens.get(key)!;
-	};
-	const call = async (path: string, { as, method = 'GET', body, headers = {}, space = 'app' }:
-		{ as?: Person; method?: string; body?: unknown; headers?: Record<string, string>; space?: string } = {}) => {
+	const app = createApp({ store, spaces });
+	/** What a site's server sends: the space's secret and who is signed in. */
+	const headers = (as?: Person, space: keyof typeof secrets = 'app') => ({
+		authorization: `Bearer ${secrets[space]}`,
+		...(as ? { [USER_HEADER]: Buffer.from(JSON.stringify(people[as])).toString('base64url') } : {})
+	});
+	const call = async (path: string, { as, method = 'GET', body, headers: extra = {}, space = 'app' }:
+		{ as?: Person; method?: string; body?: unknown; headers?: Record<string, string>; space?: keyof typeof secrets } = {}) => {
 		const response = await app(new Request(new URL(path, server), {
 			method,
 			headers: {
-				origin: site,
-				...(as ? { authorization: `Bearer ${token(as, space)}` } : {}),
+				...headers(as, space),
 				...(body === undefined ? {} : { 'content-type': 'application/json' }),
-				...headers
+				...extra
 			},
 			body: body === undefined ? undefined : JSON.stringify(body)
 		}));
@@ -49,7 +49,7 @@ function setup(database = ':memory:') {
 	const place = { page: `${site}/overview`, url: `${site}/overview?tab=2#top`, surface: '', title: 'Overview' };
 	const start = (as: Person = 'ada', body = 'Tighten this heading') =>
 		call('/v1/spaces/app/threads', { as, method: 'POST', body: { ...place, x: 120.04, y: 48, body } });
-	return { store, app, call, start, token, place };
+	return { store, app, call, start, headers, place };
 }
 
 test('a thread starts with its first comment and is read by its author', async () => {
@@ -78,36 +78,42 @@ test('signed-out viewers see nothing and cannot write', async () => {
 	assert.equal((await call('/v1/spaces/app/events')).status, 401);
 	const post = await call('/v1/spaces/app/threads', { method: 'POST', body: { ...place, x: 1, y: 1, body: 'x' } });
 	assert.equal(post.status, 401);
-	const forged = await call('/v1/spaces/app', { headers: { authorization: 'Bearer not-a-real-token-at-all-000000' } });
-	assert.equal(forged.body.viewer, null);
 });
 
-test('a token signs in to its own space only, and spaces keep their threads apart', async () => {
-	const { call, start, token } = setup();
+test('only a site’s server with the space’s secret can call it', async () => {
+	const { call } = setup();
+	const wrong = await call('/v1/spaces/app', { as: 'ada', headers: { authorization: `Bearer ${secrets.other}` } });
+	assert.equal(wrong.status, 401);
+	assert.equal((await call('/v1/spaces/app', { as: 'ada', headers: { authorization: '' } })).status, 401);
+	// An unknown space gets the same answer as a wrong secret.
+	assert.deepEqual(await call('/v1/spaces/nowhere', { as: 'ada' }).then((r) => [r.status, r.body]), [wrong.status, wrong.body]);
+	// No CORS: browsers never call the server directly.
+	assert.equal(wrong.headers.get('access-control-allow-origin'), null);
+});
+
+test('the site says who is signed in; an invalid user is refused', async () => {
+	const { call } = setup();
+	const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+	assert.equal((await call('/v1/spaces/app', { headers: { [USER_HEADER]: 'not base64 json' } })).status, 400);
+	assert.equal((await call('/v1/spaces/app', { headers: { [USER_HEADER]: encode({ sub: 'x' }) } })).status, 400);
+	const insecure = await call('/v1/spaces/app', { headers: { [USER_HEADER]: encode({ sub: 'x', name: 'X', picture: 'http://images.example/x.png' }) } });
+	assert.deepEqual(insecure.body.viewer, { sub: 'x', name: 'X' });
+});
+
+test('spaces keep their threads, and their people, apart', async () => {
+	const { call, start } = setup();
 	await start();
-	const other = await call('/v1/spaces/other', { headers: { origin: 'https://other.example', authorization: `Bearer ${token('ada')}` } });
-	assert.equal(other.body.viewer, null);
-	const own = await call('/v1/spaces/other', { as: 'ada', space: 'other', headers: { origin: 'https://other.example' } });
+	const own = await call('/v1/spaces/other', { as: 'ada', space: 'other' });
 	assert.equal(own.body.viewer.sub, 'user-ada');
 	assert.deepEqual(own.body.threads, []);
-	assert.equal((await call('/v1/spaces/nowhere', { as: 'ada' })).status, 404);
-});
-
-test('only the space’s sites can call it, with CORS for them', async () => {
-	const { call, place } = setup();
-	const evil = await call('/v1/spaces/app', { as: 'ada', headers: { origin: 'https://evil.example' } });
-	assert.equal(evil.status, 403);
-	const preview = await call('/v1/spaces/app', { as: 'ada', headers: { origin: 'https://pr-12.preview.example' } });
-	assert.equal(preview.status, 200);
-	assert.equal(preview.headers.get('access-control-allow-origin'), 'https://pr-12.preview.example');
-	const preflight = await call('/v1/spaces/app/threads', { method: 'OPTIONS' });
-	assert.equal(preflight.status, 204);
-	assert.match(preflight.headers.get('access-control-allow-headers')!, /Authorization/);
-	// A thread can only be placed on a page of one of the space's sites.
-	const elsewhere = await call('/v1/spaces/app/threads', {
-		as: 'ada', method: 'POST', body: { ...place, url: 'https://evil.example/', x: 1, y: 1, body: 'x' }
+	// Another site renaming the same id in its own space does not rename the author here.
+	const renamed = { ...people.ada, name: 'Not Ada' };
+	await call('/v1/spaces/other/threads', {
+		space: 'other', method: 'POST', headers: { [USER_HEADER]: Buffer.from(JSON.stringify(renamed)).toString('base64url') },
+		body: { page: 'p', url: 'https://other.example/', surface: '', title: '', x: 1, y: 1, body: 'Elsewhere' }
 	});
-	assert.equal(elsewhere.status, 400);
+	const list = await call('/v1/spaces/app', { as: 'ben' });
+	assert.equal(list.body.threads[0].comments[0].author.name, 'Ada Example');
 });
 
 test('writes must be JSON', async () => {
@@ -126,6 +132,7 @@ test('rejects invalid pages, positions and bodies', async () => {
 	assert.equal((await post({ x: 1, y: 'far', body: 'x' })).status, 400);
 	assert.equal((await post({ x: 1, y: 1, body: '   ' })).status, 400);
 	assert.equal((await post({ x: 1, y: 1, body: 'x'.repeat(5001) })).status, 413);
+	assert.equal((await post({ url: 'javascript:alert(1)', x: 1, y: 1, body: 'x' })).status, 400);
 });
 
 test('a thread keeps its surface, its element and what the host said about the place', async () => {
@@ -162,14 +169,14 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2
 async function upload(context: ReturnType<typeof setup>, as: Person | undefined, bytes: Uint8Array<ArrayBuffer>, type = 'image/png', query = '?width=40&height=30') {
 	const response = await context.app(new Request(new URL(`/v1/spaces/app/images${query}`, server), {
 		method: 'POST',
-		headers: { origin: site, 'content-type': type, ...(as ? { authorization: `Bearer ${context.token(as)}` } : {}) },
+		headers: { ...context.headers(as), 'content-type': type },
 		body: bytes
 	}));
 	return { status: response.status, body: await response.json() };
 }
 
-async function image(context: ReturnType<typeof setup>, path: string) {
-	const response = await context.app(new Request(new URL(path, server)));
+async function image(context: ReturnType<typeof setup>, path: string, as: Person | null = 'ben', space: keyof typeof secrets = 'app') {
+	const response = await context.app(new Request(new URL(path, server), { headers: context.headers(as ?? undefined, space) }));
 	return { status: response.status, headers: response.headers, bytes: response.ok ? new Uint8Array(await response.arrayBuffer()) : null };
 }
 
@@ -186,14 +193,16 @@ test('images upload first, then belong to the comment they are sent with', async
 	assert.equal(created.body.thread.comments[0].body, '');
 	assert.deepEqual(created.body.thread.comments[0].images, [{ id, key, width: 40, height: 30 }]);
 
-	// Its address is all it takes to see it, so it works in an <img> on any site.
-	const read = await image(context, `/v1/images/${id}/${key}`);
+	// Signed-in people of the space see it, through the site's server.
+	const read = await image(context, `/v1/spaces/app/images/${id}/${key}`);
 	assert.equal(read.status, 200);
 	assert.deepEqual(read.bytes, PNG);
 	assert.equal(read.headers.get('content-type'), 'image/png');
 	assert.equal(read.headers.get('x-content-type-options'), 'nosniff');
-	assert.equal(read.headers.get('cross-origin-resource-policy'), 'cross-origin');
-	assert.equal((await image(context, `/v1/images/${id}/wrong-key-123`)).status, 404);
+	assert.match(read.headers.get('cache-control')!, /^private/);
+	assert.equal((await image(context, `/v1/spaces/app/images/${id}/wrong-key-123`)).status, 404);
+	assert.equal((await image(context, `/v1/spaces/app/images/${id}/${key}`, null)).status, 401);
+	assert.equal((await image(context, `/v1/spaces/other/images/${id}/${key}`, 'ben', 'other')).status, 404);
 
 	// Someone else's upload, or one already sent, cannot be attached again.
 	const stolen = await call('/v1/spaces/app/threads/1/comments', { as: 'ben', method: 'POST', body: { images: [id] } });
@@ -208,11 +217,11 @@ test('editing a comment can drop its images, and deleting it deletes them', asyn
 	await call('/v1/spaces/app/threads', { as: 'ada', method: 'POST', body: { ...place, x: 1, y: 1, body: 'Two', images: [first.id, second.id] } });
 	const edited = await call('/v1/spaces/app/comments/1', { as: 'ada', method: 'PATCH', body: { body: 'One', images: [second.id] } });
 	assert.deepEqual(edited.body.thread.comments[0].images.map((i: { id: number }) => i.id), [second.id]);
-	assert.equal((await image(context, `/v1/images/${first.id}/${first.key}`)).status, 404);
+	assert.equal((await image(context, `/v1/spaces/app/images/${first.id}/${first.key}`)).status, 404);
 	const emptied = await call('/v1/spaces/app/comments/1', { as: 'ada', method: 'PATCH', body: { body: '', images: [] } });
 	assert.equal(emptied.status, 400);
 	await call('/v1/spaces/app/comments/1', { as: 'ada', method: 'DELETE' });
-	assert.equal((await image(context, `/v1/images/${second.id}/${second.key}`)).status, 404);
+	assert.equal((await image(context, `/v1/spaces/app/images/${second.id}/${second.key}`)).status, 404);
 });
 
 test('only real PNG, JPEG, GIF and WebP images are accepted', async () => {
@@ -266,7 +275,7 @@ test('a comment can only be changed through its own space', async () => {
 	const { call, start } = setup();
 	await start();
 	const across = await call('/v1/spaces/other/comments/1', {
-		as: 'ada', space: 'other', method: 'PATCH', body: { body: 'From elsewhere' }, headers: { origin: 'https://other.example' }
+		as: 'ada', space: 'other', method: 'PATCH', body: { body: 'From elsewhere' }
 	});
 	assert.equal(across.status, 404);
 });
@@ -278,29 +287,19 @@ test('thread numbers count per space and are never reused', async () => {
 	await call('/v1/spaces/app/threads/2', { as: 'ada', method: 'DELETE' });
 	assert.equal((await start()).body.thread.id, 3);
 	const other = await call('/v1/spaces/other/threads', {
-		as: 'ada', space: 'other', method: 'POST', headers: { origin: 'https://other.example' },
+		as: 'ada', space: 'other', method: 'POST',
 		body: { ...place, url: 'https://other.example/', x: 1, y: 1, body: 'First here' }
 	});
 	assert.equal(other.body.thread.id, 1);
-});
-
-test('signing out ends the token', async () => {
-	const { call, token } = setup();
-	const signedIn = token('ada');
-	assert.equal((await call('/v1/spaces/app', { as: 'ada' })).body.viewer.sub, 'user-ada');
-	assert.equal((await call('/v1/spaces/app/session', { as: 'ada', method: 'DELETE' })).status, 200);
-	const after = await call('/v1/spaces/app', { headers: { authorization: `Bearer ${signedIn}` } });
-	assert.equal(after.body.viewer, null);
 });
 
 test('the event stream announces every write in its space', async () => {
 	const context = setup();
 	const controller = new AbortController();
 	const response = await context.app(new Request(new URL('/v1/spaces/app/events', server), {
-		headers: { origin: site, authorization: `Bearer ${context.token('ben')}` }, signal: controller.signal
+		headers: context.headers('ben'), signal: controller.signal
 	}));
 	assert.equal(response.headers.get('content-type'), 'text/event-stream');
-	assert.equal(response.headers.get('access-control-allow-origin'), site);
 	const reader = response.body!.getReader();
 	const decoder = new TextDecoder();
 	assert.match(decoder.decode((await reader.read()).value), /^retry:/);

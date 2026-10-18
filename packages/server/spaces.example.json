@@ -1,12 +1,10 @@
 {
 	"my-team": {
 		"name": "Team prototype",
-		"origins": ["https://app.example.com", "http://localhost:*"],
-		"members": ["*@convex.works", "*@partner.example"]
+		"secret": "<openssl rand -base64 32>"
 	},
-	"convex-works": {
-		"name": "Convex Works",
-		"origins": ["https://*.convex.works"],
-		"members": ["group:convex-works"]
+	"paraframe": {
+		"name": "Paraframe showcase",
+		"secret": "<openssl rand -base64 32>"
 	}
 }

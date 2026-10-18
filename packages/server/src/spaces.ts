@@ -1,32 +1,28 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 /**
- * A space holds one team's threads, for the sites it lists. Spaces come from
- * configuration, not from the database:
+ * A space holds one team's threads. Spaces come from configuration, not from
+ * the database:
  *
  * ```json
  * {
- *   "my-team": {
- *     "name": "Team prototype",
- *     "origins": ["https://app.example.com", "http://localhost:*"],
- *     "members": ["*@convex.works", "*@partner.example"]
- *   }
+ *   "my-team": { "name": "Team prototype", "secret": "…" }
  * }
  * ```
  *
- * `origins` are the sites that can show the space's comments: exact origins,
- * `https://*.example.com` for any subdomain, or `http://localhost:*` for any
- * port. `members` say who can sign in: `*@example.com` for a domain, an
- * exact address, or `*` for anyone the identity provider signs in.
+ * The site's server sends the secret with every request, and says who is
+ * signed in; the site decides who that may be. Each site has its own space
+ * and secret.
  */
 export interface Space {
 	id: string;
 	name: string;
-	origins: string[];
-	members: string[];
+	secret: string;
 }
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const hash = (value: string) => createHash('sha256').update(value).digest();
 
 export class Spaces {
 	private spaces = new Map<string, Space>();
@@ -46,13 +42,11 @@ export class Spaces {
 		const list: Space[] = [];
 		for (const [id, value] of Object.entries(config as Record<string, unknown>)) {
 			const space = value as Partial<Space> | null;
-			const strings = (list: unknown) => Array.isArray(list) && list.every((item) => typeof item === 'string');
 			if (!ID.test(id)) throw new Error(`Space id “${id}” must be lowercase letters, digits and dashes`);
-			if (!space || !strings(space.origins) || !strings(space.members)) {
-				throw new Error(`Space “${id}” needs lists of origins and members`);
+			if (typeof space?.secret !== 'string' || space.secret.length < 32) {
+				throw new Error(`Space “${id}” needs a secret of at least 32 characters`);
 			}
-			for (const origin of space.origins!) originPattern(origin);
-			list.push({ id, name: typeof space.name === 'string' ? space.name : id, origins: space.origins!, members: space.members! });
+			list.push({ id, name: typeof space.name === 'string' ? space.name : id, secret: space.secret });
 		}
 		return new Spaces(list);
 	}
@@ -62,36 +56,7 @@ export class Spaces {
 	}
 }
 
-/** Whether a site can show the space's comments. */
-export function allowsOrigin(space: Space, origin: string | null | undefined): boolean {
-	if (!origin) return false;
-	return space.origins.some((pattern) => originPattern(pattern).test(origin));
-}
-
-/** Whether a person can sign in to the space. Needs an address the provider has not marked unverified. */
-export function allowsMember(space: Space, email: string | undefined): boolean {
-	if (space.members.includes('*')) return true;
-	if (!email) return false;
-	const address = email.toLowerCase();
-	return space.members.some((member) => {
-		const rule = member.toLowerCase();
-		return rule.startsWith('*@') ? address.endsWith(rule.slice(1)) : address === rule;
-	});
-}
-
-const patterns = new Map<string, RegExp>();
-
-function originPattern(pattern: string): RegExp {
-	let regex = patterns.get(pattern);
-	if (regex) return regex;
-	const match = /^([a-z][a-z0-9+.-]*):\/\/(\*\.)?([^/:*]+)(?::(\d+|\*))?$/.exec(pattern);
-	if (!match) throw new Error(`Invalid origin “${pattern}”: use scheme://host, scheme://*.host or scheme://host:*`);
-	const [, scheme, wildcard, host, port] = match;
-	const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	regex = new RegExp(
-		`^${escape(scheme)}://${wildcard ? '(?:[a-z0-9-]+\\.)+' : ''}${escape(host)}` +
-		`${port === '*' ? '(?::\\d+)?' : port ? `:${port}` : ''}$`
-	);
-	patterns.set(pattern, regex);
-	return regex;
+/** Whether a request carries the space's secret. */
+export function hasSecret(space: Space, value: string | undefined): boolean {
+	return value !== undefined && timingSafeEqual(hash(value), hash(space.secret));
 }

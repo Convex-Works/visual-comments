@@ -1,7 +1,8 @@
-// The script-tag build: `<script src="https://comments.example/v1/visual-comments.js" data-space="team" defer>`.
-// The server is where the script came from, unless `data-server` says otherwise.
-// `data-page` gives every page the same threads; `data-toolbar="false"` hides
-// the floating toolbar; `data-shortcut` changes the C key, or turns it off with "".
+// The script-tag build: `<script src="https://comments.example/v1/visual-comments.js" defer>`.
+// The site's server answers `/_comments` (`data-endpoint` for another path)
+// and its sign-in is at `/auth` (`data-auth`). `data-page` gives every page
+// the same threads; `data-toolbar="false"` hides the floating toolbar;
+// `data-shortcut` changes the C key, or turns it off with "".
 import { createVisualComments, VisualComments } from './lib/index.js';
 
 declare global {
@@ -14,12 +15,13 @@ declare global {
 const script = document.currentScript as HTMLScriptElement | null;
 window.VisualComments = { create: createVisualComments };
 
-if (script?.dataset.space && !window.visualComments) {
-	const { space, server, page, toolbar, shortcut } = script.dataset;
+// `data-manual` leaves starting to the page, through `VisualComments.create`.
+if (script && !('manual' in script.dataset) && !window.visualComments) {
+	const { endpoint, auth, page, toolbar, shortcut } = script.dataset;
 	const start = () => {
 		window.visualComments = createVisualComments({
-			server: server ?? new URL(script.src).origin,
-			space,
+			endpoint: endpoint || undefined,
+			auth: auth || undefined,
 			page: page || undefined,
 			toolbar: toolbar === undefined ? undefined : toolbar !== 'false',
 			shortcut: shortcut === undefined ? undefined : shortcut || false

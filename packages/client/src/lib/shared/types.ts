@@ -1,21 +1,21 @@
 // Shapes shared by the browser client and the server.
 
-/** Who wrote a comment. From the sign-in, saved by the server. */
+/** Who wrote a comment. From the site's sign-in, saved by the server. */
 export interface Author {
 	sub: string;
 	name: string;
 	picture?: string;
 }
 
-/** The signed-in person. */
+/** The person signed in on the site. */
 export interface Viewer extends Author {
 	email?: string;
 }
 
-/** An image in a comment, served at `<server>/v1/images/<id>/<key>`. */
+/** An image in a comment, served at `<endpoint>/images/<id>/<key>`. */
 export interface CommentImage {
 	id: number;
-	/** Part of its address: whoever has the address can see the image. */
+	/** Part of its address, so addresses cannot be guessed from ids. */
 	key: string;
 	/** Its size in pixels, so it can be laid out before it loads. */
 	width: number;

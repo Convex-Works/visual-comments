@@ -2,19 +2,15 @@
 	"name": "@visual-comments/server",
 	"private": true,
 	"type": "module",
-	"description": "The visual-comments server: sign-in and comment threads for every space.",
+	"description": "The visual-comments server: comment threads for every space, called by the sites' own servers.",
 	"scripts": {
 		"start": "node src/main.ts",
-		"dev": "DEV_LOGIN=1 EXAMPLES_PORT=4401 SPACES=spaces.dev.json node --watch src/main.ts",
+		"dev": "SPACES=spaces.dev.json DATABASE=data/dev.sqlite node --watch src/main.ts",
 		"test": "node --test 'test/*.test.ts'",
 		"check": "tsc --noEmit -p ."
 	},
-	"dependencies": {
-		"openid-client": "^6.8.8"
-	},
 	"devDependencies": {
 		"@types/node": "^26.0.0",
-		"jose": "^6.2.12",
 		"typescript": "~6.0.3"
 	}
 }

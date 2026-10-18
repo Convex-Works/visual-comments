@@ -33,7 +33,7 @@
 					{#if vc.viewer?.email}<p class="mt-0.5 truncate text-xs text-vc-muted">{vc.viewer.email}</p>{/if}
 					{#if vc.store.spaceName}<p class="mt-0.5 truncate text-xs text-vc-muted">Comments in {vc.store.spaceName}</p>{/if}
 				</div>
-				<MenuItem onselect={() => { close(); void vc.signOut(); }}>Sign out</MenuItem>
+				<MenuItem onselect={() => { close(); vc.signOut(); }}>Sign out</MenuItem>
 			{/snippet}
 		</Menu>
 	{:else}

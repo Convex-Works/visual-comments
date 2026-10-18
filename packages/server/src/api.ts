@@ -1,6 +1,7 @@
 import { CommentError, type CommentStore } from './store.ts';
-import { allowsOrigin, type Space, type Spaces } from './spaces.ts';
+import { hasSecret, type Space, type Spaces } from './spaces.ts';
 import { IMAGE_TYPES, MAX_BODY, MAX_CONTEXT, MAX_CONTEXT_VALUE, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../client/src/lib/shared/limits.ts';
+import { USER_HEADER } from '../../client/src/lib/shared/protocol.ts';
 import type { CommentAnchor, CommentsSnapshot, Viewer } from '../../client/src/lib/shared/types.ts';
 
 const MAX_IMAGE_SIDE = 20_000;
@@ -90,8 +91,8 @@ function context(value: unknown): Record<string, string> {
 	return Object.fromEntries(entries);
 }
 
-/** An address on one of the space's sites, without its fragment. */
-function address(value: unknown, space: Space): string {
+/** A web address, without its fragment. */
+function address(value: unknown): string {
 	const raw = text(value, 2048);
 	let url: URL;
 	try {
@@ -99,7 +100,7 @@ function address(value: unknown, space: Space): string {
 	} catch {
 		throw new CommentError(400, 'Invalid page address.');
 	}
-	if (!allowsOrigin(space, url.origin)) throw new CommentError(400, 'This page is not on a site of this space.');
+	if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new CommentError(400, 'Invalid page address.');
 	url.hash = '';
 	return url.href;
 }
@@ -117,33 +118,37 @@ async function input(request: Request): Promise<Record<string, unknown>> {
 	throw new CommentError(400, 'Invalid request.');
 }
 
-export function bearer(request: Request): string | undefined {
-	const match = /^Bearer ([\w-]{20,200})$/.exec(request.headers.get('authorization') ?? '');
-	return match?.[1];
+function bearer(request: Request): string | undefined {
+	return /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
 }
 
-/** CORS for a space's sites. Requests carry a bearer token, never cookies. */
-export function cors(origin: string | null): Record<string, string> {
-	return origin
-		? {
-			'Access-Control-Allow-Origin': origin,
-			'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE',
-			'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-			'Access-Control-Max-Age': '600',
-			Vary: 'Origin'
-		}
-		: {};
-}
-
-function withHeaders(response: Response, headers: Record<string, string>): Response {
-	for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
-	return response;
+/** Who the site says is signed in, or null. The site is trusted: it has the space's secret. */
+function viewerOf(request: Request): Viewer | null {
+	const raw = request.headers.get(USER_HEADER);
+	if (!raw) return null;
+	let value: Record<string, unknown>;
+	try {
+		value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+	} catch {
+		throw new CommentError(400, 'Invalid user.');
+	}
+	const sub = text(value?.sub, 255);
+	const name = text(value?.name, 200);
+	if (!sub || !name) throw new CommentError(400, 'Invalid user.');
+	const email = text(value.email, 320);
+	const picture = text(value.picture, 2048);
+	return {
+		sub,
+		name,
+		...(email ? { email } : {}),
+		...(picture && /^https:\/\//.test(picture) ? { picture } : {})
+	};
 }
 
 /**
- * The comment endpoints, under `/v1/spaces/<space>`. A request from a browser
- * must come from one of the space's sites; any request that reads or writes
- * comments needs a sign-in token for the space.
+ * The comment endpoints, under `/v1/spaces/<space>`. Only a site's server
+ * calls them, with the space's secret and the person signed in on the site;
+ * browsers reach them through that server.
  */
 export class CommentsApi {
 	private store: CommentStore;
@@ -155,30 +160,18 @@ export class CommentsApi {
 	}
 
 	async handle(request: Request, url: URL): Promise<Response | undefined> {
-		const image = url.pathname.match(/^\/v1\/images\/(\d+)\/([\w-]{8,64})$/);
-		if (image) return this.image(request, Number(image[1]), image[2]);
-
 		const match = url.pathname.match(/^\/v1\/spaces\/([a-z0-9-]+)(\/.*)?$/);
 		if (!match) return undefined;
 		const space = this.spaces.get(match[1]);
-		if (!space) return fail(404, 'No such space.');
-		const origin = request.headers.get('origin');
-		if (origin && !allowsOrigin(space, origin)) return fail(403, 'This site cannot show the comments of this space.');
-		const headers = cors(origin);
-		if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-		const route = (match[2] ?? '').replace(/\/$/, '');
-		return withHeaders(await this.route(request, url, space, route), headers);
-	}
-
-	private viewer(request: Request, space: Space): Viewer | null {
-		const token = bearer(request);
-		return token ? this.store.session(token, space.id) : null;
+		// The same answer for an unknown space, so spaces cannot be found by trying.
+		if (!space || !hasSecret(space, bearer(request))) return fail(401, 'Unknown space, or the wrong secret.');
+		return this.route(request, url, space, (match[2] ?? '').replace(/\/$/, ''));
 	}
 
 	private async route(request: Request, url: URL, space: Space, route: string): Promise<Response> {
 		const method = request.method;
 		try {
-			const viewer = this.viewer(request, space);
+			const viewer = viewerOf(request);
 			let match: RegExpMatchArray | null;
 			if (method === 'GET' && route === '') {
 				const snapshot: CommentsSnapshot = {
@@ -190,9 +183,8 @@ export class CommentsApi {
 			}
 			if (!viewer) return fail(401, 'Sign in to see comments.');
 			if (method === 'GET' && route === '/events') return this.events(request, space.id);
-			if (method === 'DELETE' && route === '/session') {
-				this.store.endSession(bearer(request)!);
-				return json({ viewer: null });
+			if ((match = route.match(/^\/images\/(\d+)\/([\w-]{8,64})$/)) && method === 'GET') {
+				return this.image(space.id, Number(match[1]), match[2]);
 			}
 
 			if (route === '/images' && method === 'POST') {
@@ -203,7 +195,7 @@ export class CommentsApi {
 				const images = imageIds(data.images);
 				const thread = this.store.createThread(space.id, viewer, {
 					page: text(data.page, 2048) ?? fail400('Unknown page.'),
-					url: address(data.url, space),
+					url: address(data.url),
 					surface: typeof data.surface === 'string' ? data.surface.slice(0, 200) : '',
 					title: text(data.title, 200) ?? '',
 					x: coordinate(data.x),
@@ -259,24 +251,17 @@ export class CommentsApi {
 		}
 	}
 
-	private image(request: Request, id: number, key: string): Response {
-		if (request.method !== 'GET') return fail(405, 'Method not allowed.');
-		try {
-			const image = this.store.image(id, key);
-			return new Response(image.data as Uint8Array<ArrayBuffer>, {
-				headers: {
-					'Content-Type': image.type,
-					// An image's address is never reused, so its bytes never change.
-					'Cache-Control': 'public, max-age=31536000, immutable',
-					'Cross-Origin-Resource-Policy': 'cross-origin',
-					'X-Content-Type-Options': 'nosniff',
-					'Content-Security-Policy': "default-src 'none'; sandbox"
-				}
-			});
-		} catch (error) {
-			if (error instanceof CommentError) return fail(error.status, error.message);
-			throw error;
-		}
+	private image(space: string, id: number, key: string): Response {
+		const image = this.store.image(space, id, key);
+		return new Response(image.data as Uint8Array<ArrayBuffer>, {
+			headers: {
+				'Content-Type': image.type,
+				// An image's address is never reused, so its bytes never change.
+				'Cache-Control': 'private, max-age=31536000, immutable',
+				'X-Content-Type-Options': 'nosniff',
+				'Content-Security-Policy': "default-src 'none'; sandbox"
+			}
+		});
 	}
 
 	/** An image sent as the raw request body, with `?width=&height=` measured by the browser. */

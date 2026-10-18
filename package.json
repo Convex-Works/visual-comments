@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"build": "pnpm -F visual-comments build",
-		"dev": "pnpm -F visual-comments build && pnpm --parallel -F visual-comments -F @visual-comments/server dev",
+		"dev": "pnpm -F visual-comments build && pnpm --parallel -F visual-comments -F @visual-comments/server -F @visual-comments/examples dev",
 		"test": "pnpm -r test",
 		"check": "pnpm -r check"
 	}

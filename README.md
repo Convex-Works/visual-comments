@@ -2,8 +2,9 @@
 
 Comments pinned to the elements of a web page, like a design tool's comments
 or Vercel's preview comments. One server holds the comments of many sites:
-a prototype viewer such as paraframe, a deployed web app built with any
-framework, and later a browser extension for any page.
+a prototype viewer such as paraframe, or a deployed web app built with any
+framework. Each site signs its people in, and its own server passes their
+comment requests on to the comment server.
 
 People press **C** (or the speech-bubble button) to enter comment mode, then
 click what they mean. The pin attaches to the element under the pointer, and
@@ -11,28 +12,58 @@ follows it as the page scrolls, zooms or changes. Threads have replies,
 images, resolve and unread state, and update live.
 
 ```
-packages/client   the browser part: a Svelte 5 library, and one script for any site
-packages/server   the server: sign-in, spaces, threads, images and live updates
-examples          a plain page and a zoomable canvas of frames, for development
+packages/client   the browser part (a Svelte 5 library, and one script for any site),
+                  and the proxy for the site's server (visual-comments/server)
+packages/server   the comment server: spaces, threads, images and live updates
+examples          a site with its own server and sign-in: a plain page and a zoomable canvas of frames
 ```
 
 ## Add comments to a site
 
-One script tag. The server is where the script comes from:
+A site needs two things on its own server: a sign-in, and a route that passes
+comment requests on to the comment server with the space's secret.
+[@convex-works/sign-in](../sign-in) is the sign-in; any other works if it can
+say who is signed in.
+
+```ts
+// SvelteKit: src/hooks.server.ts
+import { sequence } from '@sveltejs/kit/hooks';
+import { createSignIn } from '@convex-works/sign-in/server';
+import { commentsProxy } from 'visual-comments/server';
+
+const signIn = createSignIn({ issuer, clientId, clientSecret, secret });
+const comments = commentsProxy({
+  server: 'https://comments.convex.works',
+  space: 'my-team',
+  secret: env.COMMENTS_SECRET            // the space's secret; never sent to browsers
+});
+
+export const handle = sequence(signIn.sveltekit(), comments.sveltekit());
+```
+
+`comments.sveltekit()` answers `/_comments/*` and takes the person from
+`event.locals.user`. Any other server with the Fetch API calls
+`comments.handle(request, user)`, which answers `/_comments/*` and returns
+undefined for other requests. `user` is `{ sub, name, email?, picture? }`, or
+null when nobody is signed in. A server in another language does the same in a
+few lines: forward `/_comments/<rest>` to `<server>/v1/spaces/<space>/<rest>`
+with `Authorization: Bearer <secret>`, and the person as base64url JSON in
+`Visual-Comments-User`.
+
+Then one script tag on the pages:
 
 ```html
-<script src="https://comments.convex.works/v1/visual-comments.js" data-space="my-team" defer></script>
+<script src="https://comments.convex.works/v1/visual-comments.js" defer></script>
 ```
 
 | Attribute | Meaning |
 |---|---|
-| `data-space` | The space whose threads the site shows. Required. |
+| `data-endpoint` | Where the site's server answers comment requests. Default `/_comments`. |
+| `data-auth` | Where the site's sign-in routes are: `<auth>/login?returnTo=…` and a POST to `<auth>/logout`. Default `/auth`. |
 | `data-page` | One page key for every address, when all pages share their threads. Default: the address's origin and path. |
 | `data-toolbar="false"` | No floating toolbar; the site has its own button. |
 | `data-shortcut` | Another key for comment mode, or `""` for none. |
-| `data-server` | Another server than the script's. |
-
-The site must be one of the space's origins (see [Spaces](#spaces)).
+| `data-manual` | Do not start; the page calls `VisualComments.create({...})`. |
 
 ### Declare surfaces in markup
 
@@ -63,8 +94,8 @@ For an app that needs more than markup, such as zooming its canvas to a thread:
 import { createVisualComments } from 'visual-comments';
 
 const comments = createVisualComments({
-	server: 'https://comments.convex.works',
-	space: 'my-team',
+	endpoint: '/_comments',                   // the default
+	auth: '/auth',                            // or { signIn() {…}, signOut() {…} }
 	page: 'prototype',                        // or (url) => key
 	show: (thread) => canvas.zoomTo(thread.surface),   // return true when handled
 	describe: (surface) => ({ title: frames.get(surface)?.title, order: frames.index(surface) }),
@@ -108,13 +139,9 @@ pnpm -F @visual-comments/server start
 
 | Variable | Meaning |
 |---|---|
-| `PUBLIC_URL` | Where the server is reached, e.g. `https://comments.convex.works`. The identity provider redirects to `<PUBLIC_URL>/auth/callback`. |
 | `PORT` | Default 4400. |
 | `DATABASE` | SQLite file. Default `data/comments.sqlite`. |
 | `SPACES` | The spaces, as JSON or a path to a JSON file. Default `spaces.json`. |
-| `OIDC_ISSUER` | Default `https://id.convex.works`. |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | A confidential client with the code flow and S256 PKCE, and the callback above as redirect URL. |
-| `DEV_LOGIN=1` | Sign in with any name, without an identity provider. Only on localhost. |
 
 The `Dockerfile` builds an image of the server. Mount the database's folder
 at `/data` and the spaces at `/config/spaces.json`. Run one instance: the
@@ -122,40 +149,38 @@ database is a file.
 
 ### Spaces
 
-A space holds one team's threads, for the sites it lists. Spaces are
-configuration ([example](packages/server/spaces.example.json)):
-
-- `origins`: the sites that can show the space. Exact origins,
-  `https://*.example.com` for any subdomain, `http://localhost:*` for any port.
-- `members`: who can sign in. `*@example.com`, an exact address, `group:name`
-  for a group of the identity provider, or `*` for anyone it signs in. An
-  address the provider has not verified does not count.
+A space holds one site's threads. Spaces are configuration
+([example](packages/server/spaces.example.json)): an id, a name and a secret
+of at least 32 characters (`openssl rand -base64 32`). Keep the file in a
+secret store: whoever has a space's secret can read the space and write as
+anyone in it. Give each site its own space and secret.
 
 Thread numbers (#12) count per space and are never reused.
 
-### Sign-in
+### Who is signed in
 
-The server signs people in on its own origin, so it does not depend on
-third-party cookies. The site opens `/auth/login` in a popup; after the
-identity provider signs the person in, the server checks that they are a
-member of the space and gives the site a token for that space. The token goes
-by `postMessage` to the opener, at the site's origin only.
-When the popup lost its opener, or popups are blocked, the token returns in
-the fragment of the site's address instead. The site keeps the token in its
-own storage and sends it as a bearer token. A token lasts 30 days after its last use,
-works for one space only, and signing out ends it on the server.
+The comment server has no sign-in of its own. It trusts the site's server,
+which proves itself with the space's secret and names the person in each
+request. So the site decides who may see and write comments, and its session
+(an HttpOnly cookie, with [@convex-works/sign-in](../sign-in)) is the only
+one: signing in or out of the site does the same for its comments. A request
+without a person sees no threads and cannot write.
 
-Images are served at addresses with a random key, so they show in `<img>` on
-any site; whoever has the address can see the image.
+People are kept per space, so a site can only change how its own people
+appear. Images are served through the site's server too, to its signed-in
+people only.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm dev     # builds the client on change; the server on :4400 with development sign-in; the examples on :4401
+pnpm dev     # builds the client on change; the comment server on :4400; the examples site on :4401
 pnpm test    # the server's API, storage and sign-in
 pnpm check
 ```
 
-The examples are served from another origin than the server, as real sites
-are. `spaces.dev.json` admits any localhost site.
+The examples site (`examples/server.ts`) has its own server, as real sites
+do: it signs people in with [@convex-works/sign-in](../sign-in), with any name
+unless `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `SESSION_SECRET` are set,
+and passes comment requests on to the `demo` space of `spaces.dev.json`.
+It expects the sign-in repository next to this one.

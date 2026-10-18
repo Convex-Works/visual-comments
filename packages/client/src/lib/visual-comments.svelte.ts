@@ -1,6 +1,6 @@
 import { mount, unmount, untrack } from 'svelte';
 import { aimAt, type Aim } from './core/aim.js';
-import { Session } from './core/session.js';
+import { Api } from './core/api.js';
 import { discover, inside, surfaceAt, toClient, type Rect, type Surface } from './core/surfaces.js';
 import { reveal, scrollerFrom, type CommentTarget } from './core/target.js';
 import { Threads } from './core/threads.svelte.js';
@@ -10,10 +10,13 @@ import { properties, styles } from './ui/generated/styles.js';
 import type { CommentImage, CommentThread } from './shared/types.js';
 
 export interface VisualCommentsOptions {
-	/** The comment server, e.g. `https://comments.convex.works`. */
-	server: string;
-	/** The space whose threads this page shows. */
-	space: string;
+	/** Where the site's server passes comment requests on to the comment server. Default `/_comments`. */
+	endpoint?: string;
+	/**
+	 * The site's sign-in: the path of its routes, as in `@convex-works/sign-in`
+	 * (default `/auth`), or functions that sign in and out.
+	 */
+	auth?: string | { signIn(): void; signOut(): void };
 	/**
 	 * The page threads belong to. Default: the address's origin and path, so
 	 * the query and fragment do not matter. A fixed string makes every page share threads.
@@ -77,7 +80,7 @@ const DRAG = 4;
  * sign-in, drawn in a shadow root over the page. One per page.
  */
 export class VisualComments {
-	readonly session: Session;
+	readonly api: Api;
 	readonly store: Threads;
 	options = $state.raw<VisualCommentsOptions>() as VisualCommentsOptions;
 
@@ -122,8 +125,8 @@ export class VisualComments {
 	constructor(options: VisualCommentsOptions, doc: Document = document) {
 		this.options = options;
 		this.doc = doc;
-		this.session = new Session(options.server, options.space);
-		this.store = new Threads(this.session);
+		this.api = new Api(options.endpoint ?? '/_comments');
+		this.store = new Threads(this.api);
 		this.host = doc.createElement('visual-comments');
 		this.host.setAttribute('data-vc-ignore', '');
 		this.host.style.cssText = 'position:fixed;inset:0;z-index:2147483600;pointer-events:none;display:block;';
@@ -231,13 +234,25 @@ export class VisualComments {
 		this.revealing = undefined;
 	}
 
+	/** Leaves for the site's sign-in, and comes back to this address. */
 	signIn() {
-		this.session.signIn();
+		const auth = this.options.auth ?? '/auth';
+		if (typeof auth === 'object') return auth.signIn();
+		const returnTo = `${location.pathname}${location.search}${location.hash}`;
+		location.assign(`${auth.replace(/\/$/, '')}/login?${new URLSearchParams({ returnTo })}`);
 	}
 
-	async signOut() {
+	signOut() {
 		this.toggle(false);
-		await this.session.signOut();
+		const auth = this.options.auth ?? '/auth';
+		if (typeof auth === 'object') return auth.signOut();
+		// A form, so the site's server can send the browser on to the identity provider.
+		const form = this.doc.createElement('form');
+		form.method = 'POST';
+		form.action = `${auth.replace(/\/$/, '')}/logout`;
+		form.hidden = true;
+		this.doc.body.appendChild(form);
+		form.submit();
 	}
 
 	/** Measures the page again, e.g. after the host moved surfaces in a way it cannot see. */
@@ -287,7 +302,7 @@ export class VisualComments {
 		doc.documentElement.appendChild(this.host);
 		this.app = mount(App, { target: shadow, props: { vc: this } });
 
-		this.cleanup.push(this.session.start(), this.store.start());
+		this.cleanup.push(this.store.start());
 		const hash = /(?:^#|&)vc=(\d+)/.exec(location.hash);
 		if (hash) {
 			this.linked = Number(hash[1]);

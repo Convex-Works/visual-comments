@@ -1,7 +1,6 @@
 {
 	"demo": {
 		"name": "Demo",
-		"origins": ["http://localhost:*", "http://127.0.0.1:*"],
-		"members": ["*"]
+		"secret": "development-only-secret-for-the-demo-space"
 	}
 }

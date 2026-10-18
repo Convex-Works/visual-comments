@@ -1,7 +1,7 @@
 {
 	"name": "visual-comments",
 	"version": "0.1.0",
-	"description": "Comments pinned to the elements of any web page or app, with one server for every site.",
+	"description": "Comments pinned to the elements of any web page or app, with one comment server for every site.",
 	"license": "UNLICENSED",
 	"type": "module",
 	"scripts": {
@@ -21,6 +21,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"svelte": "./dist/index.js"
+		},
+		"./server": {
+			"types": "./dist/server/index.d.ts",
+			"import": "./dist/server/index.js"
 		},
 		"./widget.js": "./dist-widget/visual-comments.js"
 	},
