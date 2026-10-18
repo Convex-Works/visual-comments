@@ -3,6 +3,7 @@
 	"private": true,
 	"type": "module",
 	"description": "A site with its own server, sign-in and comments, for development.",
+	"license": "MIT",
 	"scripts": {
 		"dev": "node --watch server.ts"
 	},

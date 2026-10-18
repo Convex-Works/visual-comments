@@ -3,6 +3,7 @@
 	"private": true,
 	"type": "module",
 	"description": "The visual-comments server: comment threads for every space, called by the sites' own servers.",
+	"license": "MIT",
 	"scripts": {
 		"start": "node src/main.ts",
 		"dev": "SPACES=spaces.dev.json DATABASE=data/dev.sqlite node --watch src/main.ts",

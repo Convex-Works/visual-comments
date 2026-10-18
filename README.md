@@ -170,6 +170,10 @@ People are kept per space, so a site can only change how its own people
 appear. Images are served through the site's server too, to its signed-in
 people only.
 
+## License
+
+[MIT](LICENSE)
+
 ## Development
 
 ```sh
