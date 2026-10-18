@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img">
+  <title>visual-comments</title>
+  <g fill="#e8461e">
+    <path d="M6.59 3H4A3 3 0 0 0 1 6V12A3 3 0 0 0 4 15H10A3 3 0 0 0 13 12V9.41A5.5 5.5 0 0 1 12 9.5H11V12A1 1 0 0 1 10 13H4A1 1 0 0 1 3 12V6A1 1 0 0 1 4 5H6.5V4A5.5 5.5 0 0 1 6.59 3Z"/>
+    <path d="M8 8V4A4 4 0 1 1 12 8Z"/>
+  </g>
+</svg>
