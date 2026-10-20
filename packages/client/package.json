@@ -2,17 +2,39 @@
 	"name": "visual-comments",
 	"version": "0.1.0",
 	"description": "Comments pinned to the elements of any web page or app, with one comment server for every site.",
+	"keywords": [
+		"comments",
+		"annotations",
+		"feedback",
+		"design-review",
+		"preview-comments",
+		"svelte",
+		"sveltekit",
+		"self-hosted"
+	],
+	"homepage": "https://github.com/Convex-Works/visual-comments#readme",
+	"bugs": {
+		"url": "https://github.com/Convex-Works/visual-comments/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Convex-Works/visual-comments.git",
+		"directory": "packages/client"
+	},
 	"license": "MIT",
+	"author": "Convex Works",
 	"type": "module",
 	"scripts": {
 		"css": "node scripts/build-css.mjs",
 		"build": "pnpm css && svelte-package -i src/lib -o dist && vite build",
 		"dev": "node scripts/build-css.mjs --watch & vite build --watch",
-		"check": "pnpm css && svelte-check --tsconfig ./tsconfig.json"
+		"check": "pnpm css && svelte-check --tsconfig ./tsconfig.json",
+		"prepack": "pnpm build"
 	},
 	"files": [
 		"dist",
-		"dist-widget"
+		"dist-widget",
+		"!dist-widget/*.map"
 	],
 	"sideEffects": false,
 	"svelte": "./dist/index.js",
