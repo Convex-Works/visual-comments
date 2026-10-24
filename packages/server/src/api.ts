@@ -1,8 +1,12 @@
-import { CommentError, type CommentStore } from './store.ts';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { Presence, type PresenceInput, type PresenceOptions } from './presence.ts';
+import { agentSub, CommentError, type CommentStore } from './store.ts';
 import { hasSecret, type Space, type Spaces } from './spaces.ts';
 import { IMAGE_TYPES, MAX_BODY, MAX_CONTEXT, MAX_CONTEXT_VALUE, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../client/src/lib/shared/limits.ts';
-import { USER_HEADER } from '../../client/src/lib/shared/protocol.ts';
-import type { CommentAnchor, CommentsSnapshot, Viewer } from '../../client/src/lib/shared/types.ts';
+import { AGENT_HEADER, AGENT_TOKEN_PREFIX, USER_HEADER } from '../../client/src/lib/shared/protocol.ts';
+import type {
+	Agent, AgentInbox, AgentRequest, CommentAnchor, CommentsSnapshot, NewAgentRequest, Viewer
+} from '../../client/src/lib/shared/types.ts';
 
 const MAX_IMAGE_SIDE = 20_000;
 // Recognised by their first bytes, not by the type the browser claims.
@@ -15,6 +19,34 @@ const IMAGE_SIGNATURES: Record<string, (bytes: Uint8Array) => boolean> = {
 const MAX_REQUEST = 32 * 1024;
 const KEEPALIVE_MS = 25_000;
 const noStore = { 'Cache-Control': 'no-store' };
+
+const AGENTS_OFF = 'Agents are turned off for this space.';
+const AGENT_GONE = 'This agent was removed, or its token has expired.';
+const UNKNOWN_REQUEST = 'This request was denied or has expired.';
+/** A space's requests to join waiting at once, so nobody can fill the memory with them. */
+const MAX_REQUESTS = 20;
+/** No I/O or 0/1, so the code reads the same on both screens. */
+const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const CODE_DIGITS = '23456789';
+const STATES = ['viewing', 'typing', 'working'];
+
+export interface ApiOptions extends PresenceOptions {
+	/** The longest `GET /agent/next` and the token pickup hold. Default 50 s, under common proxy timeouts. */
+	maxWaitMs?: number;
+	/** How long a request to join waits for a person. Default 10 minutes. */
+	requestMs?: number;
+	/** The inbox holds back a thread while its last author types in it, at most this long after their comment. Default 30 s. */
+	typingHoldMs?: number;
+}
+
+/** An agent's request to join, until it collects its token. */
+interface JoinRequest extends NewAgentRequest {
+	space: string;
+	/** Set when a person approved it. */
+	answer?: { token: string; agent: Agent };
+	/** Token pickups waiting for an answer. */
+	waiting: Set<() => void>;
+}
 
 const starts = (bytes: Uint8Array, prefix: number[]) => prefix.every((byte, i) => bytes[i] === byte);
 
@@ -145,6 +177,69 @@ function viewerOf(request: Request): Viewer | null {
 	};
 }
 
+/** A short presence value. Too long is refused, not cut: hosts match pages and surfaces by it. */
+function presenceText(value: unknown, max: number): string | undefined {
+	if (value === undefined || value === null || value === '') return undefined;
+	if (typeof value !== 'string' || value.length > max) fail400('Invalid presence.');
+	return value;
+}
+
+function presenceInput(data: Record<string, unknown>): PresenceInput {
+	const thread = data.thread ?? undefined;
+	if (thread !== undefined && !(Number.isSafeInteger(thread) && (thread as number) > 0)) fail400('Invalid presence.');
+	return {
+		state: STATES.includes(data.state as string) ? data.state as PresenceInput['state'] : fail400('Invalid presence.'),
+		page: presenceText(data.page, 2048),
+		surface: presenceText(data.surface, 200),
+		thread: thread as number | undefined,
+		note: presenceText(data.note, 200)
+	};
+}
+
+/** `?wait=` in seconds, as milliseconds, at most `max`. */
+function waitOf(value: string | null, max: number): number {
+	if (value === null) return max;
+	const seconds = Number(value);
+	if (!value.trim() || !(seconds >= 0)) fail400('Invalid wait.');
+	return Math.min(seconds * 1000, max);
+}
+
+const digest = (value: string) => createHash('sha256').update(value).digest();
+
+/** Like `WXYZ-2345`. */
+function joinCode(): string {
+	const pick = (from: string, count: number) => Array.from({ length: count }, () => from[randomInt(from.length)]).join('');
+	return `${pick(CODE_LETTERS, 4)}-${pick(CODE_DIGITS, 4)}`;
+}
+
+/** Waits up to `ms`; less when the request is aborted or `listen` calls the wake it is given. */
+function until(ms: number, signal: AbortSignal, listen: (wake: () => void) => () => void): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	let unlisten = () => {};
+	const wake = () => {
+		clearTimeout(timer);
+		signal.removeEventListener('abort', wake);
+		unlisten();
+		resolve();
+	};
+	const timer = setTimeout(wake, Math.max(0, ms));
+	signal.addEventListener('abort', wake);
+	unlisten = listen(wake);
+	if (signal.aborted) wake();
+	return promise;
+}
+
+/** Listens for `change` events of one space. */
+function onChange(target: EventTarget, space: string, run: () => void): () => void {
+	const listener = (event: Event) => {
+		if ((event as CustomEvent<string>).detail === space) run();
+	};
+	target.addEventListener('change', listener);
+	return () => target.removeEventListener('change', listener);
+}
+
+const requestOf = ({ id, name, code, expiresAt }: JoinRequest): AgentRequest => ({ id, name, code, expiresAt });
+
 /**
  * The comment endpoints, under `/v1/spaces/<space>`. Only a site's server
  * calls them, with the space's secret and the person signed in on the site;
@@ -153,10 +248,20 @@ function viewerOf(request: Request): Viewer | null {
 export class CommentsApi {
 	private store: CommentStore;
 	private spaces: Spaces;
+	private presence: Presence;
+	/** Requests to join, by id. In memory: they last minutes, and one instance serves every space. */
+	private requests = new Map<string, JoinRequest>();
+	private maxWaitMs: number;
+	private requestMs: number;
+	private typingHoldMs: number;
 
-	constructor(store: CommentStore, spaces: Spaces) {
+	constructor(store: CommentStore, spaces: Spaces, options: ApiOptions = {}) {
 		this.store = store;
 		this.spaces = spaces;
+		this.presence = new Presence(options);
+		this.maxWaitMs = options.maxWaitMs ?? 50_000;
+		this.requestMs = options.requestMs ?? 10 * 60 * 1000;
+		this.typingHoldMs = options.typingHoldMs ?? 30_000;
 	}
 
 	async handle(request: Request, url: URL): Promise<Response | undefined> {
@@ -168,11 +273,36 @@ export class CommentsApi {
 		return this.route(request, url, space, (match[2] ?? '').replace(/\/$/, ''));
 	}
 
+	/** The person the site says is signed in, or the agent whose token the site passed on. */
+	private identify(request: Request, space: Space): { viewer: Viewer; agent?: Agent } | null {
+		const token = request.headers.get(AGENT_HEADER);
+		if (!token) {
+			const viewer = viewerOf(request);
+			return viewer && { viewer };
+		}
+		if (request.headers.has(USER_HEADER)) throw new CommentError(400, 'Send a user or an agent, not both.');
+		if (!space.agents) throw new CommentError(403, AGENTS_OFF);
+		const agent = token.startsWith(AGENT_TOKEN_PREFIX) ? this.store.agentByToken(space.id, token) : undefined;
+		if (!agent) throw new CommentError(401, AGENT_GONE);
+		const viewer: Viewer = { sub: agentSub(agent.id), name: agent.name, agent: { addedBy: agent.addedBy } };
+		this.presence.touch(space.id, viewer, agent.id);
+		return { viewer, agent };
+	}
+
 	private async route(request: Request, url: URL, space: Space, route: string): Promise<Response> {
 		const method = request.method;
 		try {
-			const viewer = viewerOf(request);
 			let match: RegExpMatchArray | null;
+			if (/^\/agents?(\/|$)/.test(route) && !space.agents) return fail(403, AGENTS_OFF);
+			// An agent asking to join has no identity yet, and a stale token must not stop it.
+			if (route === '/agents/requests' && method === 'POST') return json(this.ask(space.id, await input(request)), 201);
+			if ((match = route.match(/^\/agents\/requests\/([\w-]+)\/token$/)) && method === 'POST') {
+				return await this.collect(request, space.id, match[1]);
+			}
+
+			const caller = this.identify(request, space);
+			const viewer = caller?.viewer ?? null;
+			const agent = caller?.agent;
 			if (method === 'GET' && route === '') {
 				const snapshot: CommentsSnapshot = {
 					space: { id: space.id, name: space.name },
@@ -182,7 +312,40 @@ export class CommentsApi {
 				return json(snapshot);
 			}
 			if (!viewer) return fail(401, 'Sign in to see comments.');
-			if (method === 'GET' && route === '/events') return this.events(request, space.id);
+			if (method === 'GET' && route === '/events') return this.events(request, space.id, viewer, agent);
+			if (route === '/presence' && method === 'POST') {
+				this.setPresence(space.id, viewer, agent, await input(request));
+				return new Response(null, { status: 204, headers: noStore });
+			}
+			if (route === '/agent/next' && method === 'GET') {
+				if (!agent) return fail(403, 'Only agents have an inbox.');
+				return await this.next(request, space.id, viewer, agent.id, waitOf(url.searchParams.get('wait'), this.maxWaitMs));
+			}
+			if (route === '/agents' && method === 'GET') return json({ agents: this.store.agents(space.id) });
+			if ((match = route.match(/^\/agents\/([\w-]+)$/)) && method === 'DELETE' && match[1] !== 'requests') {
+				const id = match[1];
+				if (agent && agent.id !== id) return fail(403, 'Agents can only remove themselves.');
+				this.store.removeAgent(space.id, id);
+				this.presence.removeAgent(space.id, id);
+				return json({ deleted: id });
+			}
+			if ((match = route.match(/^\/agents\/requests\/([\w-]+)(\/approve)?$/))) {
+				if (agent) return fail(403, 'Only people can let agents in.');
+				const pending = this.pending(space.id, match[1]);
+				// Answered requests are gone for people, so nobody approves one twice.
+				if (!pending || pending.answer) return fail(404, UNKNOWN_REQUEST);
+				if (method === 'GET' && !match[2]) return json({ request: requestOf(pending) });
+				if (method === 'POST' && match[2]) {
+					pending.answer = this.store.addAgent(space.id, viewer, pending.name);
+					for (const wake of pending.waiting) wake();
+					return json({ agent: pending.answer.agent });
+				}
+				if (method === 'DELETE' && !match[2]) {
+					this.requests.delete(pending.id);
+					for (const wake of pending.waiting) wake();
+					return json({ deleted: pending.id });
+				}
+			}
 			if ((match = route.match(/^\/images\/(\d+)\/([\w-]{8,64})$/)) && method === 'GET') {
 				return this.image(space.id, Number(match[1]), match[2]);
 			}
@@ -279,30 +442,157 @@ export class CommentsApi {
 		});
 	}
 
-	/** Server-sent events: a `change` event after any write in the space, so clients refetch. */
-	private events(request: Request, space: string): Response {
+	// Agents joining.
+
+	/** A request of the space that has not expired. */
+	private pending(space: string, id: string): JoinRequest | undefined {
+		const pending = this.requests.get(id);
+		if (pending && pending.expiresAt <= Date.now()) {
+			this.requests.delete(id);
+			for (const wake of pending.waiting) wake();
+			return undefined;
+		}
+		return pending?.space === space ? pending : undefined;
+	}
+
+	private ask(space: string, data: Record<string, unknown>): NewAgentRequest {
+		const name = typeof data.name === 'string' ? data.name.trim() : '';
+		if (!name || name.length > 60) fail400('Give the agent a name of up to 60 characters.');
+		let count = 0;
+		for (const pending of [...this.requests.values()]) if (this.pending(space, pending.id)) count++;
+		if (count >= MAX_REQUESTS) throw new CommentError(429, 'Too many agents are waiting to join. Try again later.');
+		const pending: JoinRequest = {
+			id: randomBytes(24).toString('base64url'),
+			name,
+			code: joinCode(),
+			expiresAt: Date.now() + this.requestMs,
+			secret: randomBytes(24).toString('base64url'),
+			space,
+			waiting: new Set()
+		};
+		this.requests.set(pending.id, pending);
+		return { ...requestOf(pending), secret: pending.secret };
+	}
+
+	/** The agent's token, once, as soon as a person approves; 202 while nobody has answered yet. */
+	private async collect(request: Request, space: string, id: string): Promise<Response> {
+		const data = await input(request);
+		const secret = typeof data.secret === 'string' ? data.secret : '';
+		const deadline = Date.now() + this.maxWaitMs;
+		for (;;) {
+			const pending = this.pending(space, id);
+			// One answer for every failure, so ids cannot be probed without the secret.
+			if (!pending || !timingSafeEqual(digest(pending.secret), digest(secret))) return fail(404, UNKNOWN_REQUEST);
+			if (pending.answer) {
+				this.requests.delete(id);
+				return json(pending.answer);
+			}
+			const now = Date.now();
+			if (now >= deadline || request.signal.aborted) return json({ pending: true }, 202);
+			await until(Math.min(deadline, pending.expiresAt) - now, request.signal, (wake) => {
+				pending.waiting.add(wake);
+				return () => pending.waiting.delete(wake);
+			});
+		}
+	}
+
+	// Presence.
+
+	private setPresence(space: string, viewer: Viewer, agent: Agent | undefined, data: Record<string, unknown>) {
+		if (!agent) {
+			if (typeof data.connection !== 'string' || data.key !== undefined) fail400('Invalid presence.');
+			this.presence.update(space, viewer, { connection: data.connection }, presenceInput(data));
+			return;
+		}
+		if (data.connection !== undefined) fail400('Invalid presence.');
+		const key = presenceText(data.key, 200) ?? '';
+		this.presence.update(space, viewer, { agent: agent.id, key }, data.state === 'gone' ? 'gone' : presenceInput(data));
+	}
+
+	/**
+	 * The agent's inbox: holds until a thread has something new from someone
+	 * else, then answers every such thread and marks them read for the agent.
+	 */
+	private async next(request: Request, space: string, viewer: Viewer, agent: string, wait: number): Promise<Response> {
+		const deadline = Date.now() + wait;
+		let removed = false;
+		let wakeNow = () => {};
+		const release = this.presence.hold(space, agent, () => {
+			removed = true;
+			wakeNow();
+		});
+		try {
+			for (;;) {
+				if (removed) return fail(401, AGENT_GONE);
+				const now = Date.now();
+				let wakeAt = deadline;
+				const threads = this.store.unread(space, viewer.sub).filter((thread) => {
+					// Someone still typing in the thread is likely to add to it: wait for the whole message.
+					const last = thread.comments.at(-1)!;
+					const holdUntil = last.createdAt + this.typingHoldMs;
+					if (now >= holdUntil || !this.presence.typing(space, last.author.sub, thread.id)) return true;
+					wakeAt = Math.min(wakeAt, holdUntil);
+					return false;
+				});
+				if (threads.length || now >= deadline || request.signal.aborted) {
+					if (threads.length) this.store.markSeen(space, viewer.sub, threads);
+					const inbox: AgentInbox = { threads, participants: this.presence.participants(space) };
+					return json(inbox);
+				}
+				await until(wakeAt - now, request.signal, (wake) => {
+					wakeNow = wake;
+					const offStore = onChange(this.store.events, space, wake);
+					const offPresence = onChange(this.presence.events, space, wake);
+					return () => {
+						wakeNow = () => {};
+						offStore();
+						offPresence();
+					};
+				});
+			}
+		} finally {
+			release();
+		}
+	}
+
+	/**
+	 * Server-sent events: `hello` with the stream's connection, `presence` with
+	 * everyone here whenever that changes, and `change` after any write in the
+	 * space, so clients refetch. A person is present while their stream is open.
+	 */
+	private events(request: Request, space: string, viewer: Viewer, agent: Agent | undefined): Response {
 		const encoder = new TextEncoder();
-		const store = this.store;
+		const { store, presence } = this;
 		let cleanup = () => {};
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				const send = (chunk: string) => {
 					try { controller.enqueue(encoder.encode(chunk)); } catch { cleanup(); }
 				};
-				const onchange = (event: Event) => {
-					if ((event as CustomEvent<string>).detail === space) send('event: change\ndata: {}\n\n');
-				};
-				const keepalive = setInterval(() => send(': keepalive\n\n'), KEEPALIVE_MS);
-				store.events.addEventListener('change', onchange);
-				cleanup = () => {
-					clearInterval(keepalive);
-					store.events.removeEventListener('change', onchange);
-				};
-				request.signal.addEventListener('abort', () => {
+				const sendPresence = () => send(`event: presence\ndata: ${JSON.stringify({ participants: presence.participants(space) })}\n\n`);
+				const close = () => {
 					cleanup();
 					try { controller.close(); } catch { /* already closed */ }
-				});
+				};
+				const connection = agent ? randomBytes(16).toString('base64url') : presence.connect(space, viewer);
+				// An agent's stream keeps it present, and ends when it is removed.
+				const leave = agent ? presence.hold(space, agent.id, close) : () => presence.disconnect(space, connection);
+				const keepalive = setInterval(() => send(': keepalive\n\n'), KEEPALIVE_MS);
+				const offStore = onChange(store.events, space, () => send('event: change\ndata: {}\n\n'));
+				const offPresence = onChange(presence.events, space, sendPresence);
+				let open = true;
+				cleanup = () => {
+					if (!open) return;
+					open = false;
+					clearInterval(keepalive);
+					offStore();
+					offPresence();
+					leave();
+				};
+				request.signal.addEventListener('abort', close);
 				send('retry: 3000\n\n');
+				send(`event: hello\ndata: ${JSON.stringify({ connection })}\n\n`);
+				sendPresence();
 			},
 			cancel() {
 				cleanup();

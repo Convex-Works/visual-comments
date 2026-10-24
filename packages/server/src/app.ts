@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
-import { CommentsApi } from './api.ts';
+import { CommentsApi, type ApiOptions } from './api.ts';
 import type { Spaces } from './spaces.ts';
 import type { CommentStore } from './store.ts';
 
@@ -9,6 +9,8 @@ export interface AppConfig {
 	spaces: Spaces;
 	/** The built client, served at `/v1/`. */
 	widgetDir?: string;
+	/** Timings of long-polls and presence; the defaults suit production. */
+	api?: ApiOptions;
 }
 
 const TYPES: Record<string, string> = {
@@ -22,7 +24,7 @@ const TYPES: Record<string, string> = {
 
 /** The whole server as one fetch-style handler. */
 export function createApp(config: AppConfig) {
-	const api = new CommentsApi(config.store, config.spaces);
+	const api = new CommentsApi(config.store, config.spaces, config.api);
 
 	return async (request: Request): Promise<Response> => {
 		const url = new URL(request.url);

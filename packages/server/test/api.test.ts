@@ -303,10 +303,13 @@ test('the event stream announces every write in its space', async () => {
 	const reader = response.body!.getReader();
 	const decoder = new TextDecoder();
 	assert.match(decoder.decode((await reader.read()).value), /^retry:/);
+	assert.match(decoder.decode((await reader.read()).value), /^event: hello/);
+	assert.match(decoder.decode((await reader.read()).value), /^event: presence/);
 	await context.start();
 	assert.match(decoder.decode((await reader.read()).value), /^event: change/);
 	controller.abort();
-	assert.equal((await reader.read()).done, true);
+	// Any presence event already queued, then the end.
+	while (!(await reader.read()).done);
 });
 
 test('threads persist in the SQLite file across restarts', async () => {

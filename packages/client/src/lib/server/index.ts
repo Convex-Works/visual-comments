@@ -1,8 +1,9 @@
 // For the site's server: passes the browser's comment requests on to the
-// comment server, with the space's secret and the person signed in on the site.
+// comment server, with the space's secret and the person signed in on the site,
+// or the token of an agent of the space.
 // Uses only the Fetch API, so it runs in Node, Bun, Deno and Workers.
 
-import { USER_HEADER } from '../shared/protocol.js';
+import { AGENT_HEADER, AGENT_TOKEN_PREFIX, USER_HEADER } from '../shared/protocol.js';
 
 export interface CommentsProxyOptions {
 	/** The comment server, e.g. `https://comments.convex.works`. */
@@ -41,7 +42,11 @@ export function commentsProxy(options: CommentsProxyOptions) {
 			const value = request.headers.get(name);
 			if (value) headers.set(name, value);
 		}
-		if (user) {
+		// An agent's token speaks for the agent, even from a browser where someone is signed in.
+		// Any other bearer token is the site's business and stays here.
+		const token = /^Bearer (\S+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+		if (token?.startsWith(AGENT_TOKEN_PREFIX)) headers.set(AGENT_HEADER, token);
+		else if (user) {
 			const { sub, name, email, picture } = user;
 			headers.set(USER_HEADER, base64url(JSON.stringify({ sub, name, email, picture })));
 		}

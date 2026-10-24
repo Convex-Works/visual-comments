@@ -5,6 +5,8 @@ export interface Author {
 	sub: string;
 	name: string;
 	picture?: string;
+	/** Set when the author is an agent: it joined the space when a person approved it. */
+	agent?: { addedBy: { sub: string; name: string } };
 }
 
 /** The person signed in on the site. */
@@ -96,4 +98,65 @@ export interface NewThreadInput {
 	context?: Record<string, string>;
 	body: string;
 	images?: number[];
+}
+
+/** What someone present is doing. */
+export type PresenceState = 'viewing' | 'typing' | 'working';
+
+/** Someone in the space right now: one per browser tab, or one per task of an agent. */
+export interface Participant {
+	/** Stable while they stay. */
+	id: string;
+	author: Author;
+	state: PresenceState;
+	page?: string;
+	surface?: string;
+	thread?: number;
+	/** What they are doing, in their words, e.g. `Tightening the table`. */
+	note?: string;
+	/** When the state last changed, in milliseconds since the epoch. */
+	since: number;
+}
+
+/** What a client sends to `POST /presence`. */
+export interface PresenceUpdate {
+	/** A browser's connection, from the event stream's `hello` event. Agents leave it out. */
+	connection?: string;
+	/** Agents only: one participant per key, so one agent can work on several things at once. Default `''`. */
+	key?: string;
+	/** `gone` removes the participant. */
+	state: PresenceState | 'gone';
+	page?: string;
+	surface?: string;
+	thread?: number;
+	note?: string;
+}
+
+/** An agent of the space. */
+export interface Agent {
+	id: string;
+	name: string;
+	addedBy: { sub: string; name: string };
+	createdAt: number;
+	lastSeenAt: number | null;
+}
+
+/** An agent asking to join the space, waiting for a person to approve it. */
+export interface AgentRequest {
+	id: string;
+	name: string;
+	/** Shown to the agent and to the person approving, so both know it is the same request. */
+	code: string;
+	expiresAt: number;
+}
+
+/** The request as the agent that asked gets it: with the secret it collects its token with. */
+export interface NewAgentRequest extends AgentRequest {
+	secret: string;
+}
+
+/** What `GET /agent/next` answers: the threads with something new for the agent. */
+export interface AgentInbox {
+	threads: CommentThread[];
+	participants: Participant[];
 }

@@ -1,9 +1,13 @@
 import type { Api } from './api.js';
 import type {
-	Comment, CommentImage, CommentThread, CommentsSnapshot, NewThreadInput, Viewer
+	Agent, AgentRequest, Comment, CommentImage, CommentThread, CommentsSnapshot, NewThreadInput, Participant,
+	PresenceUpdate, Viewer
 } from '../shared/types.js';
 
 type Result = { thread?: CommentThread; deleted?: number };
+
+/** What this tab says about itself; its connection is added once the event stream names it. */
+export type OwnPresence = Omit<PresenceUpdate, 'connection' | 'key'>;
 
 /**
  * The space's threads, kept current with the server's event stream. Actions
@@ -18,12 +22,23 @@ export class Threads {
 	error = $state<string | null>(null);
 	/** Ticks every 30 seconds so relative times stay current. */
 	now = $state(Date.now());
+	/** This tab's event stream, as the server named it, while it is open. */
+	connection = $state<string | undefined>();
+	/** Everyone present in the space, this tab included, while the event stream is open. */
+	participants = $state.raw<Participant[]>([]);
+	/** The space's agents once listed; undefined until then, or when the space has them turned off. */
+	agents = $state.raw<Agent[] | undefined>();
 
 	private api: Api;
 	private refreshing?: Promise<void>;
 	private queued = false;
 	private listening?: AbortController;
 	private nextPending = -1;
+	private presence?: OwnPresence;
+	/** The last presence sent, with its connection, so an unchanged one is not sent again. */
+	private posted = '';
+	/** The participants as last received, so an unchanged list does not wake every listener. */
+	private received = '[]';
 
 	constructor(api: Api) {
 		this.api = api;
@@ -83,6 +98,20 @@ export class Threads {
 	private stopListening() {
 		this.listening?.abort();
 		this.listening = undefined;
+		this.disconnected();
+	}
+
+	/** Without the stream, who is present is unknown, and the server has already let this tab go. */
+	private disconnected() {
+		this.connection = undefined;
+		this.setParticipants([]);
+	}
+
+	private setParticipants(participants: Participant[]) {
+		const json = JSON.stringify(participants);
+		if (json === this.received) return;
+		this.received = json;
+		this.participants = participants;
 	}
 
 	/** Follows the event stream; after a dropped connection, catches up on anything missed. */
@@ -106,7 +135,7 @@ export class Threads {
 						buffer += value;
 						let end: number;
 						while ((end = buffer.indexOf('\n\n')) !== -1) {
-							if (/^event: change$/m.test(buffer.slice(0, end))) void this.refresh();
+							this.receive(buffer.slice(0, end));
 							buffer = buffer.slice(end + 2);
 						}
 					}
@@ -114,13 +143,60 @@ export class Threads {
 					// Dropped; try again shortly.
 				}
 				if (controller.signal.aborted) break;
+				this.disconnected();
 				await new Promise((done) => setTimeout(done, 3000));
 			}
 			if (this.listening === controller) this.listening = undefined;
 		})();
 	}
 
-	private async request(method: string, path: string, body?: unknown): Promise<Result> {
+	/** One message of the event stream. Servers without presence send only `change`. */
+	private receive(message: string) {
+		const event = /^event: (.*)$/m.exec(message)?.[1];
+		if (event === 'change') return void this.refresh();
+		if (event !== 'hello' && event !== 'presence') return;
+		let data;
+		try {
+			data = JSON.parse(message.match(/^data: ?(.*)$/gm)?.map((line) => line.replace(/^data: ?/, '')).join('\n') ?? '');
+		} catch {
+			return;
+		}
+		if (event === 'hello' && typeof data?.connection === 'string') {
+			this.connection = data.connection;
+			// A new connection is a new participant: tell the server what this tab is doing.
+			void this.postPresence();
+		} else if (event === 'presence' && Array.isArray(data?.participants)) {
+			this.setParticipants(data.participants);
+		}
+	}
+
+	/**
+	 * Says what this tab is doing, unless it said so already. `again` sends it
+	 * even so, as the heartbeat that keeps `typing` from lapsing.
+	 */
+	setPresence(presence: OwnPresence, again = false) {
+		this.presence = presence;
+		void this.postPresence(again);
+	}
+
+	private async postPresence(again = false) {
+		const connection = this.connection;
+		if (!connection || !this.presence) return;
+		const body = JSON.stringify({ connection, ...this.presence } satisfies PresenceUpdate);
+		if (body === this.posted && !again) return;
+		this.posted = body;
+		try {
+			const response = await this.api.fetch('/presence', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+			});
+			if (!response.ok && this.posted === body) this.posted = '';
+		} catch {
+			// The next change, or the next connection, sends it again.
+			if (this.posted === body) this.posted = '';
+		}
+	}
+
+	private async request<T = Result>(method: string, path: string, body?: unknown): Promise<T> {
 		const response = await this.api.fetch(path, {
 			method,
 			headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -130,7 +206,7 @@ export class Threads {
 		if (!response.ok) {
 			throw new Error(result.error ?? 'Something went wrong. Try again.');
 		}
-		return result as Result;
+		return result as T;
 	}
 
 	private apply(result: Result) {
@@ -223,5 +299,41 @@ export class Threads {
 
 	async markAllRead() {
 		await Promise.all(this.threads.filter((t) => t.unread).map((t) => this.markRead(t.id, true)));
+	}
+
+	// Agents.
+
+	async loadAgents() {
+		try {
+			this.agents = (await this.request<{ agents: Agent[] }>('GET', '/agents')).agents;
+		} catch {
+			this.agents = undefined;
+		}
+	}
+
+	/** Takes an agent out of the space at once: its token stops working. */
+	async removeAgent(id: string) {
+		this.agents = this.agents?.filter((agent) => agent.id !== id);
+		try {
+			await this.request('DELETE', `/agents/${encodeURIComponent(id)}`);
+		} catch (error) {
+			this.error = (error as Error).message;
+			void this.loadAgents();
+		}
+	}
+
+	/** An agent asking to join, for the person approving it. Throws when it has expired or was answered. */
+	async agentRequest(id: string): Promise<AgentRequest> {
+		return (await this.request<{ request: AgentRequest }>('GET', `/agents/requests/${encodeURIComponent(id)}`)).request;
+	}
+
+	async approveAgent(id: string): Promise<Agent> {
+		const { agent } = await this.request<{ agent: Agent }>('POST', `/agents/requests/${encodeURIComponent(id)}/approve`);
+		if (this.agents) this.agents = [...this.agents.filter((a) => a.id !== agent.id), agent];
+		return agent;
+	}
+
+	async denyAgent(id: string) {
+		await this.request('DELETE', `/agents/requests/${encodeURIComponent(id)}`);
 	}
 }

@@ -1,12 +1,13 @@
 <!--
   Everything the comments draw over the page, in one shadow root: layers that
   catch clicks over frames in comment mode, pins and cards, the list of
-  threads and the floating toolbar.
+  threads, the floating toolbar and the dialog that lets an agent join.
 -->
 <script lang="ts">
 	import type { VisualComments } from '../visual-comments.svelte.js';
 	import type { Surface } from '../core/surfaces.js';
 	import { setComments } from './context.js';
+	import Connect from './Connect.svelte';
 	import Overlay from './Overlay.svelte';
 	import Panel from './Panel.svelte';
 	import Toolbar from './Toolbar.svelte';
@@ -64,5 +65,11 @@
 
 	{#if vc.showToolbar}
 		<Toolbar />
+	{/if}
+
+	{#if vc.connecting}
+		{#key vc.connecting}
+			<Connect id={vc.connecting} />
+		{/key}
 	{/if}
 </div>

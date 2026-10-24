@@ -3,11 +3,11 @@ import { aimAt, type Aim } from './core/aim.js';
 import { Api } from './core/api.js';
 import { discover, inside, surfaceAt, toClient, type Rect, type Surface } from './core/surfaces.js';
 import { reveal, scrollerFrom, type CommentTarget } from './core/target.js';
-import { Threads } from './core/threads.svelte.js';
+import { Threads, type OwnPresence } from './core/threads.svelte.js';
 import App from './ui/App.svelte';
 import Account from './ui/Account.svelte';
 import { properties, styles } from './ui/generated/styles.js';
-import type { CommentImage, CommentThread } from './shared/types.js';
+import type { CommentImage, CommentThread, Participant } from './shared/types.js';
 
 export interface VisualCommentsOptions {
 	/** Where the site's server passes comment requests on to the comment server. Default `/_comments`. */
@@ -46,6 +46,14 @@ export interface SurfaceInfo {
 	id: string;
 	title: string;
 	element: Element | null;
+}
+
+/** Where the viewer is, as the host knows it. Others see it on the viewer's `Participant`. */
+export interface PresenceLocation {
+	/** Default: the page key. */
+	page?: string;
+	/** The surface on screen or selected, e.g. a frame's id. */
+	surface?: string;
 }
 
 export interface CommentFilters {
@@ -106,6 +114,12 @@ export class VisualComments {
 	cursor = $state.raw<{ x: number; y: number } | undefined>();
 	/** Opening a thread scrolls its element into view once it is found. */
 	revealing = $state<number | undefined>();
+	/** An agent's request to join, from `#vc-connect=<id>`, while the dialog to approve it is shown. */
+	connecting = $state<string | undefined>();
+	/** The reply field of the open thread is being written in. */
+	typing = $state(false);
+	/** Where the host says the viewer is, for others to see. */
+	private whereabouts = $state.raw<PresenceLocation>({});
 
 	readonly doc: Document;
 	readonly host: HTMLElement;
@@ -121,6 +135,8 @@ export class VisualComments {
 	private cursorSheet = new CSSStyleSheet();
 	private focusDraftHandler?: () => void;
 	private linked?: number;
+	private typingTimer?: ReturnType<typeof setTimeout>;
+	private presenceTimer?: ReturnType<typeof setTimeout>;
 
 	constructor(options: VisualCommentsOptions, doc: Document = document) {
 		this.options = options;
@@ -141,6 +157,21 @@ export class VisualComments {
 	get loading() { return this.store.loading; }
 	get open(): CommentThread | undefined {
 		return this.store.threads.find((thread) => thread.id === this.openId);
+	}
+
+	/** Everyone present in the space: people's tabs, this one included, and agents' tasks. Empty when signed out. */
+	get participants(): Participant[] { return this.store.participants; }
+	/** This tab's connection to the server's event stream, as in `Participant.id`, while it is open. */
+	get connection(): string | undefined { return this.store.connection; }
+
+	/** What this tab tells others: the host's location, the open thread, and whether its reply is being written. */
+	private get ownPresence(): OwnPresence {
+		return {
+			state: this.typing && this.openId !== undefined ? 'typing' : 'viewing',
+			page: this.whereabouts.page ?? (this.page || undefined),
+			surface: this.whereabouts.surface,
+			thread: this.openId
+		};
 	}
 
 	/** Threads shown as pins: on this page, unresolved unless resolved ones are shown or it is open. */
@@ -201,6 +232,7 @@ export class VisualComments {
 	}
 
 	openThread(id: number | undefined) {
+		if (id !== this.openId) this.stopTyping();
 		this.openId = id;
 		const thread = this.open;
 		if (thread?.unread) void this.store.markRead(thread.id, true);
@@ -234,6 +266,35 @@ export class VisualComments {
 		this.revealing = undefined;
 	}
 
+	/**
+	 * Tells others where the viewer is: the page, by default the page key, and
+	 * the surface, e.g. the frame on screen. Each call replaces the last.
+	 */
+	setPresence(update: PresenceLocation) {
+		const current = untrack(() => this.whereabouts);
+		if (current.page === update.page && current.surface === update.surface) return;
+		this.whereabouts = { page: update.page, surface: update.surface };
+	}
+
+	/** Called by the UI as the viewer writes in the open thread; they stop typing 5 seconds after the last key. */
+	noteTyping() {
+		if (this.openId === undefined) return;
+		this.typing = true;
+		clearTimeout(this.typingTimer);
+		this.typingTimer = setTimeout(() => this.stopTyping(), 5000);
+	}
+
+	stopTyping() {
+		clearTimeout(this.typingTimer);
+		this.typing = false;
+	}
+
+	/** Closes the dialog for an agent's request and takes it out of the address. */
+	endConnect() {
+		this.connecting = undefined;
+		dropFromHash('vc-connect');
+	}
+
 	/** Leaves for the site's sign-in, and comes back to this address. */
 	signIn() {
 		const auth = this.options.auth ?? '/auth';
@@ -264,7 +325,8 @@ export class VisualComments {
 	subscribe(listener: (comments: VisualComments) => void): () => void {
 		return $effect.root(() => {
 			$effect(() => {
-				void [this.active, this.openId, this.unreadCount, this.viewer, this.store.threads.length, this.loading];
+				void [this.active, this.openId, this.unreadCount, this.viewer, this.store.threads.length, this.loading,
+					this.store.participants, this.store.connection];
 				listener(this);
 			});
 		});
@@ -273,6 +335,8 @@ export class VisualComments {
 	destroy() {
 		for (const stop of this.cleanup.splice(0)) stop();
 		for (const stop of this.frames.values()) stop();
+		clearTimeout(this.typingTimer);
+		clearTimeout(this.presenceTimer);
 		this.frames.clear();
 		for (const app of this.slots.values()) void unmount(app);
 		this.slots.clear();
@@ -303,12 +367,13 @@ export class VisualComments {
 		this.app = mount(App, { target: shadow, props: { vc: this } });
 
 		this.cleanup.push(this.store.start());
-		const hash = /(?:^#|&)vc=(\d+)/.exec(location.hash);
-		if (hash) {
-			this.linked = Number(hash[1]);
-			const rest = location.hash.slice(1).split('&').filter((part) => !part.startsWith('vc=')).join('&');
-			history.replaceState(history.state, '', `${location.pathname}${location.search}${rest ? `#${rest}` : ''}`);
+		const linked = hashPart('vc');
+		if (linked && /^\d+$/.test(linked)) {
+			this.linked = Number(linked);
+			dropFromHash('vc');
 		}
+		// The hash stays until the request is answered, so it survives signing in first.
+		this.connecting = hashPart('vc-connect') || undefined;
 		this.cleanup.push($effect.root(() => {
 			// Open a linked thread once threads have loaded.
 			$effect(() => {
@@ -320,6 +385,18 @@ export class VisualComments {
 					this.filters.showResolved ||= Boolean(thread.resolvedAt);
 					this.focus(thread);
 				}
+			});
+			// Others see what this tab is doing: where it is, the open thread, and whether its reply is being written.
+			$effect(() => {
+				const presence = this.ownPresence;
+				clearTimeout(this.presenceTimer);
+				this.presenceTimer = setTimeout(() => this.store.setPresence(presence), 150);
+			});
+			// The server lets typing lapse unless it hears it again.
+			$effect(() => {
+				if (!this.typing) return;
+				const timer = setInterval(() => this.store.setPresence(untrack(() => this.ownPresence), true), 3000);
+				return () => clearInterval(timer);
 			});
 			// Buttons the host marked with data-vc-toggle say whether comment mode is on and if anything is unread.
 			$effect(() => {
@@ -348,6 +425,10 @@ export class VisualComments {
 		on(view, 'keydown', (event) => this.onKey(event));
 		on(view, 'keyup', (event) => this.onKey(event));
 		on(view, 'resize', () => this.schedule());
+		on(view, 'hashchange', () => {
+			const id = hashPart('vc-connect');
+			if (id) this.connecting = id;
+		});
 		on(doc, 'scroll', () => this.schedule(), { capture: true, passive: true });
 		const leave = () => this.move(undefined);
 		doc.documentElement.addEventListener('pointerleave', leave);
@@ -581,6 +662,8 @@ export class VisualComments {
 			return;
 		}
 		if (event.type !== 'keydown' || event.defaultPrevented) return;
+		// The dialog to approve an agent keeps its keys to itself.
+		if (this.host.shadowRoot?.querySelector('dialog:modal')) return;
 		const target = event.composedPath()[0] as Element | undefined;
 		if (editable(target)) return;
 		if (event.key === 'Escape') {
@@ -598,6 +681,19 @@ export class VisualComments {
 			this.toggle();
 		}
 	}
+}
+
+/** A `name=value` part of the address's fragment, whose parts are joined by `&`. */
+function hashPart(name: string): string | undefined {
+	const part = location.hash.slice(1).split('&').find((p) => p.startsWith(`${name}=`));
+	return part?.slice(name.length + 1);
+}
+
+function dropFromHash(name: string) {
+	const parts = location.hash.slice(1).split('&');
+	const rest = parts.filter((part) => part && !part.startsWith(`${name}=`)).join('&');
+	if (rest === parts.join('&')) return;
+	history.replaceState(history.state, '', `${location.pathname}${location.search}${rest ? `#${rest}` : ''}`);
 }
 
 function stop(event: Event) {

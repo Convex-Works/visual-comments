@@ -1,4 +1,6 @@
-export { VisualComments, pageOf, type VisualCommentsOptions, type SurfaceInfo, type CommentFilters } from './visual-comments.svelte.js';
+export {
+	VisualComments, pageOf, type VisualCommentsOptions, type SurfaceInfo, type CommentFilters, type PresenceLocation
+} from './visual-comments.svelte.js';
 export type * from './shared/types.js';
 
 import { VisualComments, type VisualCommentsOptions } from './visual-comments.svelte.js';

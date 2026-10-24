@@ -1,9 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { AGENT_TOKEN_PREFIX } from '../../client/src/lib/shared/protocol.ts';
 import type {
-	Author, Comment, CommentAnchor, CommentImage, CommentThread, Viewer
+	Agent, Author, Comment, CommentAnchor, CommentImage, CommentThread, Viewer
 } from '../../client/src/lib/shared/types.ts';
 
 /** A request the store refused, with the HTTP status the handler should send. */
@@ -37,6 +38,28 @@ export interface NewImage {
 
 /** Images uploaded but never sent with a comment are dropped after this long. */
 const UNSENT_IMAGE_MS = 24 * 60 * 60 * 1000;
+/** An agent's token stops working when the agent has not used it for this long. */
+const AGENT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+/** How often an agent's last use is written down. */
+const AGENT_SEEN_MS = 60 * 1000;
+
+const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
+
+/** The sub an agent writes under. People's subs come from the site's sign-in, which never makes these. */
+export const agentSub = (id: string) => `agent:${id}`;
+
+const AGENT_QUERY = `SELECT a.id, a.name, a.added_by, p.name AS added_by_name, a.created_at, a.last_seen_at FROM agents a
+	LEFT JOIN users p ON p.space = a.space AND p.sub = a.added_by`;
+
+function agentOf(row: Row): Agent {
+	return {
+		id: row.id as string,
+		name: row.name as string,
+		addedBy: { sub: row.added_by as string, name: (row.added_by_name as string | null) ?? 'Unknown' },
+		createdAt: row.created_at as number,
+		lastSeenAt: row.last_seen_at as number | null
+	};
+}
 
 type Row = Record<string, string | number | null>;
 
@@ -107,6 +130,20 @@ const MIGRATIONS: string[][] = [
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX images_by_comment ON images(comment, id)`
+	],
+	[
+		// Agents a person let into the space. Only the token's hash is kept; `added_by` is a sub in `users`.
+		`CREATE TABLE agents (
+			id TEXT PRIMARY KEY,
+			space TEXT NOT NULL,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			added_by TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			last_seen_at INTEGER,
+			revoked_at INTEGER
+		) WITHOUT ROWID`,
+		`CREATE INDEX agents_by_space ON agents(space, created_at)`
 	]
 ];
 
@@ -261,14 +298,19 @@ export class CommentStore {
 		const where = only === undefined ? '' : 'AND t.number = ?';
 		const params: (string | number)[] = only === undefined ? [space] : [space, only];
 		const users = new Map<string, Author>();
-		const userRows = this.db.prepare(`SELECT sub, name, picture FROM users WHERE space = ? AND sub IN (
+		// Agents are in `users` too, under `agent:<id>`, and carry the person who added them.
+		const userRows = this.db.prepare(`SELECT u.sub, u.name, u.picture, a.added_by, p.name AS added_by_name FROM users u
+			LEFT JOIN agents a ON a.space = u.space AND u.sub = 'agent:' || a.id
+			LEFT JOIN users p ON p.space = u.space AND p.sub = a.added_by
+			WHERE u.space = ? AND u.sub IN (
 			SELECT c.author FROM comments c JOIN threads t ON t.id = c.thread WHERE t.space = ?
 			UNION SELECT resolved_by FROM threads WHERE space = ?)`).all(space, space, space) as Row[];
 		for (const row of userRows) {
 			users.set(row.sub as string, {
 				sub: row.sub as string,
 				name: row.name as string,
-				...(row.picture ? { picture: row.picture as string } : {})
+				...(row.picture ? { picture: row.picture as string } : {}),
+				...(row.added_by ? { agent: { addedBy: { sub: row.added_by as string, name: (row.added_by_name as string | null) ?? 'Unknown' } } } : {})
 			});
 		}
 		const author = (sub: string) => users.get(sub) ?? { sub, name: 'Unknown' };
@@ -416,6 +458,72 @@ export class CommentStore {
 			} else this.db.prepare('DELETE FROM reads WHERE thread = ? AND user = ?').run(id, user.sub);
 		});
 		return this.thread(space, number, user.sub);
+	}
+
+	/** The threads where someone else wrote since the viewer last read them. */
+	unread(space: string, viewer: string): CommentThread[] {
+		return this.load(space, viewer).filter((thread) => thread.unread);
+	}
+
+	/** Marks threads read up to their last comment as given, so a comment written since stays unread. */
+	markSeen(space: string, user: string, threads: CommentThread[]) {
+		this.transaction(() => {
+			for (const thread of threads) this.markReadUpTo(this.requireThread(space, thread.id).id, user, thread.comments.at(-1)!.id);
+		});
+	}
+
+	// Agents.
+
+	/** Lets an agent in. It starts with every thread read, so only what is written later reaches it. */
+	addAgent(space: string, addedBy: Viewer, name: string): { agent: Agent; token: string } {
+		const now = Date.now();
+		const id = randomBytes(12).toString('base64url');
+		const token = AGENT_TOKEN_PREFIX + randomBytes(32).toString('base64url');
+		this.transaction(() => {
+			this.saveUser(space, addedBy, now);
+			this.saveUser(space, { sub: agentSub(id), name }, now);
+			this.db.prepare(`INSERT INTO agents (id, space, name, token_hash, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+				.run(id, space, name, tokenHash(token), addedBy.sub, now);
+			this.db.prepare(`INSERT INTO reads (thread, user, comment) SELECT t.id, ?, max(c.id) FROM threads t
+				JOIN comments c ON c.thread = t.id WHERE t.space = ? GROUP BY t.id`).run(agentSub(id), space);
+		});
+		return { agent: this.agent(space, id)!, token };
+	}
+
+	/** The space's agents that were not removed. */
+	agents(space: string): Agent[] {
+		this.ensureSameFile();
+		return (this.db.prepare(`${AGENT_QUERY} WHERE a.space = ? AND a.revoked_at IS NULL ORDER BY a.created_at, a.id`)
+			.all(space) as Row[]).map(agentOf);
+	}
+
+	agent(space: string, id: string): Agent | undefined {
+		this.ensureSameFile();
+		const row = this.db.prepare(`${AGENT_QUERY} WHERE a.space = ? AND a.id = ? AND a.revoked_at IS NULL`).get(space, id) as Row | undefined;
+		return row && agentOf(row);
+	}
+
+	/** The agent a token belongs to, unless it was removed or went unused too long. Notes the use. */
+	agentByToken(space: string, token: string, now = Date.now()): Agent | undefined {
+		this.ensureSameFile();
+		const row = this.db.prepare(`${AGENT_QUERY} WHERE a.space = ? AND a.token_hash = ? AND a.revoked_at IS NULL`)
+			.get(space, tokenHash(token)) as Row | undefined;
+		if (!row) return undefined;
+		const agent = agentOf(row);
+		if ((agent.lastSeenAt ?? agent.createdAt) < now - AGENT_EXPIRY_MS) return undefined;
+		if (agent.lastSeenAt === null || agent.lastSeenAt < now - AGENT_SEEN_MS) {
+			this.db.prepare('UPDATE agents SET last_seen_at = ? WHERE id = ?').run(now, agent.id);
+			agent.lastSeenAt = now;
+		}
+		return agent;
+	}
+
+	/** Its token stops working at once. Its comments stay. */
+	removeAgent(space: string, id: string) {
+		this.ensureSameFile();
+		const { changes } = this.db.prepare('UPDATE agents SET revoked_at = ? WHERE space = ? AND id = ? AND revoked_at IS NULL')
+			.run(Date.now(), space, id);
+		if (!changes) throw new CommentError(404, 'This agent was already removed.');
 	}
 
 	private requireThread(space: string, number: number) {

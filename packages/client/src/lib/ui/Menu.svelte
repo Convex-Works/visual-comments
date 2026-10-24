@@ -8,7 +8,8 @@
 		children,
 		align = 'start',
 		tone = 'light',
-		class: className = ''
+		class: className = '',
+		onopen
 	}: {
 		/** Accessible name for the trigger. */
 		label: string;
@@ -17,6 +18,8 @@
 		align?: 'start' | 'end';
 		tone?: 'light' | 'dark';
 		class?: string;
+		/** Called as it opens, e.g. to load what it lists. */
+		onopen?: () => void;
 	} = $props();
 
 	const id = $props.id();
@@ -27,6 +30,7 @@
 	function place(event: ToggleEvent) {
 		open = event.newState === 'open';
 		if (event.newState !== 'open' || !button || !popover) return;
+		onopen?.();
 		const rect = button.getBoundingClientRect();
 		const gutter = 12;
 		const left = align === 'start' ? rect.left : rect.right - popover.offsetWidth;

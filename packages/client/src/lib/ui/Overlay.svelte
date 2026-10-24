@@ -18,6 +18,7 @@
 	import { describeTarget, MAGNET, widen, type Box } from '../core/target.js';
 	import { docBoxToClient, docBoxToSurface, intersect, spotOf, toClient, type Rect, type Surface } from '../core/surfaces.js';
 	import { neck } from '../core/metaball.js';
+	import { activity } from '../core/presence.js';
 	import type { CommentImage, CommentThread } from '../shared/types.js';
 
 	const vc = useComments();
@@ -82,6 +83,18 @@
 		const where = spot(thread);
 		return where && !where.hidden ? [{ thread, left: where.x, top: where.y }] : [];
 	}));
+
+	/** Per thread, what those working on it say they are doing. */
+	const working = $derived.by(() => {
+		const lines = new Map<number, string>();
+		for (const participant of vc.participants) {
+			if (participant.state !== 'working' || participant.thread === undefined) continue;
+			const line = activity(participant)!;
+			const before = lines.get(participant.thread);
+			lines.set(participant.thread, before ? `${before} · ${line}` : line);
+		}
+		return lines;
+	});
 
 	/** Beside the pin, on the side with room, kept inside the stage. */
 	function beside(at: { left: number; top: number }, width: number, height: number, bounds: Rect) {
@@ -310,6 +323,7 @@
 		left={pin.left}
 		top={pin.top}
 		now={comments.now}
+		working={working.get(pin.thread.id)}
 		open={pin.thread.id === vc.openId}
 		onopen={() => {
 			vc.draft = undefined;

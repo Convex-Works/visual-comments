@@ -25,6 +25,9 @@
 	--color-vc-island: var(--vc-island, rgb(50 50 50 / 0.72));
 	--color-vc-island-ink: var(--vc-island-ink, #fff);
 	--color-vc-island-hover: var(--vc-island-hover, rgb(255 255 255 / 0.14));
+	/* An agent's badge, and the pulse of a pin and an avatar while an agent works on it. */
+	--color-vc-agent: var(--vc-agent, #292524);
+	--color-vc-working: var(--vc-working, var(--vc-comment, #0d99ff));
 }
 
 @layer base {
@@ -88,5 +91,23 @@
 	/* The comment tool: a pin whose bottom-left point is the hotspot. */
 	.vc-comment-cursor {
 		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M14 1.5a12.5 12.5 0 1 1 0 25H1.5V14A12.5 12.5 0 0 1 14 1.5z' fill='white' stroke='%231c1917' stroke-width='1.5'/%3E%3Cpath d='M14 9v10M9 14h10' stroke='%231c1917' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") 1 27, crosshair;
+	}
+	/* Something is being worked on: a ring that pulses out of the element's edge. */
+	.vc-working {
+		animation: vc-working 1.6s ease-out infinite;
+	}
+	@keyframes vc-working {
+		from {
+			box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-vc-working) 70%, transparent);
+		}
+		to {
+			box-shadow: 0 0 0 9px color-mix(in srgb, var(--color-vc-working) 0%, transparent);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.vc-working {
+			animation: none;
+			box-shadow: 0 0 0 2px var(--color-vc-working);
+		}
 	}
 }

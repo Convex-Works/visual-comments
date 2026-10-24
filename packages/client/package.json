@@ -10,6 +10,9 @@
 		"dev": "node scripts/build-css.mjs --watch & vite build --watch",
 		"check": "pnpm css && svelte-check --tsconfig ./tsconfig.json"
 	},
+	"bin": {
+		"visual-comments": "./dist/cli/index.js"
+	},
 	"files": [
 		"dist",
 		"dist-widget"

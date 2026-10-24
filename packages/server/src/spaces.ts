@@ -13,12 +13,14 @@ import { readFileSync } from 'node:fs';
  *
  * The site's server sends the secret with every request, and says who is
  * signed in; the site decides who that may be. Each site has its own space
- * and secret.
+ * and secret. `"agents": false` keeps agents out of the space.
  */
 export interface Space {
 	id: string;
 	name: string;
 	secret: string;
+	/** Whether people may let agents join. Default true. */
+	agents: boolean;
 }
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -46,7 +48,10 @@ export class Spaces {
 			if (typeof space?.secret !== 'string' || space.secret.length < 32) {
 				throw new Error(`Space “${id}” needs a secret of at least 32 characters`);
 			}
-			list.push({ id, name: typeof space.name === 'string' ? space.name : id, secret: space.secret });
+			if (space.agents !== undefined && typeof space.agents !== 'boolean') {
+				throw new Error(`Space “${id}”: agents must be true or false`);
+			}
+			list.push({ id, name: typeof space.name === 'string' ? space.name : id, secret: space.secret, agents: space.agents !== false });
 		}
 		return new Spaces(list);
 	}

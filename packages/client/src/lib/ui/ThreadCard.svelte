@@ -9,6 +9,8 @@
 	import Menu from './Menu.svelte';
 	import MenuItem from './MenuItem.svelte';
 	import { ago, fullDate } from '../core/time.js';
+	import { activity } from '../core/presence.js';
+	import { authorLabel } from './text.js';
 
 	let { thread, title, link, maxHeight, onclose }: {
 		thread: CommentThread;
@@ -26,6 +28,12 @@
 	const details = $derived(Object.entries(thread.context).map(([key, value]) => `${key}: ${value}`).join('\n'));
 	const isAuthor = $derived(thread.comments[0]?.author.sub === viewer?.sub);
 	let editing = $state<number>();
+	/** What others are doing in this thread, the working before the typing; the same line once. */
+	const doing = $derived([...new Set(vc.participants
+		.filter((p) => p.thread === thread.id && p.state !== 'viewing' && p.author.sub !== viewer?.sub)
+		.sort((a, b) => Number(b.state === 'working') - Number(a.state === 'working'))
+		.map(activity)
+		.filter((line): line is string => Boolean(line)))]);
 	let list = $state<HTMLOListElement>();
 
 	// Follow the conversation to its newest comment.
@@ -98,7 +106,7 @@
 				<div class="min-w-0 flex-1">
 					<div class="flex h-6 items-center gap-1.5">
 						<p class="min-w-0 truncate">
-							<span class="font-medium">{comment.author.name}</span>
+							<span class="font-medium" title={comment.author.agent ? authorLabel(comment.author) : undefined}>{comment.author.name}</span>
 							<time class="ml-1 text-vc-muted" datetime={new Date(comment.createdAt).toISOString()} title={fullDate(comment.createdAt)}>
 								{comment.pending ? 'sending…' : ago(comment.createdAt, comments.now)}
 							</time>
@@ -126,7 +134,9 @@
 								initial={comment.body}
 								initialImages={comment.images}
 								autofocus
+								oninput={() => vc.noteTyping()}
 								onsubmit={async (body, images) => {
+									vc.stopTyping();
 									await comments.edit(comment.id, body, images);
 									editing = undefined;
 								}}
@@ -164,12 +174,26 @@
 		{/each}
 	</ol>
 
+	{#if doing.length}
+		<div class="shrink-0 space-y-0.5 px-3.5 pb-2 text-xs text-vc-muted" aria-live="polite">
+			{#each doing as line (line)}
+				<p class="truncate" title={line}>{line}</p>
+			{/each}
+		</div>
+	{/if}
+
 	{#if viewer}
 		<footer class="flex shrink-0 items-start gap-2.5 border-t border-vc-line/70 px-3.5 py-3">
 			<Avatar user={viewer} size={24} class="mt-[3px]" />
 			<div class="min-w-0 flex-1">
 				{#key thread.id}
-					<Composer placeholder="Reply" autofocus onsubmit={(body, images) => comments.reply(thread.id, body, images)} oncancel={onclose} />
+					<Composer
+						placeholder="Reply"
+						autofocus
+						oninput={() => vc.noteTyping()}
+						onsubmit={(body, images) => { vc.stopTyping(); return comments.reply(thread.id, body, images); }}
+						oncancel={onclose}
+					/>
 				{/key}
 			</div>
 		</footer>

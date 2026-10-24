@@ -27,13 +27,15 @@
 	import { ago } from '../core/time.js';
 	import type { CommentThread } from '../shared/types.js';
 
-	let { thread, left, top, open, now, onopen }: {
+	let { thread, left, top, open, now, working, onopen }: {
 		thread: CommentThread;
 		/** The pin's point, in client pixels. */
 		left: number;
 		top: number;
 		open: boolean;
 		now: number;
+		/** Set while someone works on the thread: what they say they are doing. The pin pulses meanwhile. */
+		working?: string;
 		onopen: () => void;
 	} = $props();
 
@@ -49,6 +51,14 @@
 	const expanded = $derived((hovered || focused) && !open && textWidth > 0);
 </script>
 
+{#if working}
+	<span
+		class={['vc-pin-pulse vc-working pointer-events-none absolute', expanded ? 'z-30' : open ? 'z-20' : 'z-10']}
+		style:left="{left}px"
+		style:top="{top}px"
+		aria-hidden="true"
+	></span>
+{/if}
 <button
 	type="button"
 	data-vc-ui
@@ -68,7 +78,7 @@
 		: expanded
 			? '0 4px 18px rgb(0 0 0 / 0.22)'
 			: '0 1px 4px rgb(0 0 0 / 0.3)'}
-	aria-label="Comment #{thread.id} by {root.author.name}: {text}"
+	aria-label="Comment #{thread.id} by {root.author.name}: {text}{working ? `. ${working}` : ''}"
 	aria-expanded={open}
 	in:pop={{ duration: 240, easing: backOut }}
 	out:pop={{ duration: 140, easing: cubicIn }}
@@ -98,6 +108,9 @@
 		{#if replies > 0}
 			<span class="mt-0.5 block text-xs text-vc-muted">{replies} {replies === 1 ? 'reply' : 'replies'}</span>
 		{/if}
+		{#if working}
+			<span class="mt-0.5 block truncate text-xs text-vc-working">{working}</span>
+		{/if}
 	</span>
 	{#if thread.unread}
 		<span class="absolute top-0.5 right-0.5 size-2.5 rounded-full bg-vc-comment ring-2 ring-white"></span>
@@ -122,6 +135,13 @@
 	.vc-pin-expanded :global(.vc-pin-avatar) {
 		top: 10px;
 		left: 10px;
+	}
+	/* The collapsed pin's shape, under it: its ring pulses out from the pin's edge. */
+	.vc-pin-pulse {
+		width: 32px;
+		height: 32px;
+		border-radius: 16px 16px 16px 0;
+		transform: translateY(-100%);
 	}
 	.vc-pin-text {
 		transition: opacity 140ms ease 60ms;
