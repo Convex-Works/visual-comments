@@ -93,3 +93,9 @@ function base64url(text: string): string {
 	for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
 	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+
+export {
+	commentsFromEnv, commentsVariables,
+	type CommentsClientConfig, type CommentsEnv, type CommentsEnvName, type CommentsEnvOptions, type CommentsFromEnv,
+	type CommentsSignInOptions
+} from './env.js';

@@ -1,0 +1,27 @@
+{
+	"name": "@visual-comments/example-sveltekit",
+	"private": true,
+	"type": "module",
+	"description": "A SvelteKit app with comments set up from environment variables, and a toolbar of its own.",
+	"license": "MIT",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+	},
+	"imports": {
+		"#lib/*": "./src/lib/*"
+	},
+	"devDependencies": {
+		"@convex-works/sign-in": "link:../../../sign-in",
+		"@sveltejs/adapter-node": "^6.0.0",
+		"@sveltejs/kit": "^3.1.0",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"svelte": "^5.57.1",
+		"svelte-check": "^4.7.6",
+		"typescript": "~6.0.3",
+		"visual-comments": "workspace:*",
+		"vite": "^8.3.0"
+	}
+}

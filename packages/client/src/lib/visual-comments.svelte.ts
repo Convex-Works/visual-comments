@@ -35,6 +35,13 @@ export interface VisualCommentsOptions {
 	 * handled; otherwise threads on other pages are opened by navigating to them.
 	 */
 	show?: (thread: CommentThread) => boolean | void;
+	/**
+	 * Goes to a thread on another page, at its `link`, when `show` did not
+	 * handle it. Default: `location.assign`, which loads the page anew. An app
+	 * with its own router navigates in it instead; the thread stays open and
+	 * shows once its page is there.
+	 */
+	navigate?: (url: string, thread: CommentThread) => void;
 	/** The address that opens a thread. Default: where it was placed, with `#vc=<id>`. */
 	link?: (thread: CommentThread) => string;
 	/** A surface's title and place in the list, for surfaces not on screen. */
@@ -251,7 +258,9 @@ export class VisualComments {
 		this.revealing = thread.id;
 		if (this.options.show?.(thread)) return;
 		if (thread.page !== this.page) {
-			location.assign(this.linkOf(thread));
+			const url = this.linkOf(thread);
+			if (this.options.navigate) this.options.navigate(url, thread);
+			else location.assign(url);
 			return;
 		}
 		const surface = this.surface(thread.surface);
@@ -548,6 +557,10 @@ export class VisualComments {
 			if (this.slots.has(element) || element.shadowRoot) continue;
 			const shadow = element.attachShadow({ mode: 'open' });
 			addStyles(shadow);
+			// In the host's toolbar the button takes the toolbar's colour and type, not the comments' ink.
+			const own = this.doc.createElement('style');
+			own.textContent = ':host{color:inherit;font-family:inherit;font-size:inherit}';
+			shadow.appendChild(own);
 			this.slots.set(element, mount(Account, { target: shadow, props: { vc: this, slot: true } }));
 		}
 		for (const [element, app] of this.slots) {

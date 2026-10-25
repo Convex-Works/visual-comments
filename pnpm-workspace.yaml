@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - examples
+  - examples/sveltekit
 
 # Its prebuilt binaries are enough; the install script only rebuilds them.
 allowBuilds:

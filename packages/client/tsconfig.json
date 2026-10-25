@@ -9,7 +9,7 @@
 		"verbatimModuleSyntax": true,
 		"isolatedModules": true,
 		"skipLibCheck": true,
-		"types": []
+		"types": ["@sveltejs/kit"]
 	},
 	"include": ["src", "scripts", "vite.config.ts"]
 }

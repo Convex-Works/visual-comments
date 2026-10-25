@@ -10,3 +10,5 @@ node_modules
 /packages/client/src/lib/ui/generated
 /packages/server/data
 vite.config.ts.timestamp-*
+/examples/sveltekit/.svelte-kit
+/examples/sveltekit/build
