@@ -75,8 +75,8 @@
 			{/snippet}
 		</Menu>
 	{:else}
-		<button type="button" part="button" class="{tool} px-3.5 font-medium" disabled={vc.loading} onclick={() => vc.signIn()}>
-			{vc.loading ? 'Connecting…' : 'Sign in'}
+		<button type="button" part="button" class="{tool} px-3.5 font-medium" disabled={!vc.store.viewerKnown} onclick={() => vc.signIn()}>
+			{vc.store.viewerKnown ? 'Sign in' : 'Connecting…'}
 		</button>
 	{/if}
 </span>

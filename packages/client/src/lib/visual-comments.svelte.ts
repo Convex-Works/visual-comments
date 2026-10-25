@@ -7,7 +7,7 @@ import { Threads, type OwnPresence } from './core/threads.svelte.js';
 import App from './ui/App.svelte';
 import Account from './ui/Account.svelte';
 import { properties, styles } from './ui/generated/styles.js';
-import type { CommentImage, CommentThread, Participant } from './shared/types.js';
+import type { CommentImage, CommentThread, Participant, Viewer } from './shared/types.js';
 
 export interface VisualCommentsOptions {
 	/** Where the site's server passes comment requests on to the comment server. Default `/_comments`. */
@@ -17,6 +17,11 @@ export interface VisualCommentsOptions {
 	 * (default `/auth`), or functions that sign in and out.
 	 */
 	auth?: string | { signIn(): void; signOut(): void };
+	/**
+	 * Who is signed in, when the page knows it already (null: nobody), so the
+	 * account shows before the server answers. Default: ask the server.
+	 */
+	viewer?: Viewer | null;
 	/**
 	 * The page threads belong to. Default: the address's origin and path, so
 	 * the query and fragment do not matter. A fixed string makes every page share threads.
@@ -142,7 +147,7 @@ export class VisualComments {
 		this.options = options;
 		this.doc = doc;
 		this.api = new Api(options.endpoint ?? '/_comments');
-		this.store = new Threads(this.api);
+		this.store = new Threads(this.api, options.viewer);
 		this.host = doc.createElement('visual-comments');
 		this.host.setAttribute('data-vc-ignore', '');
 		this.host.style.cssText = 'position:fixed;inset:0;z-index:2147483600;pointer-events:none;display:block;';

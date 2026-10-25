@@ -18,6 +18,8 @@ export class Threads {
 	threads = $state<CommentThread[]>([]);
 	spaceName = $state('');
 	loading = $state(true);
+	/** Whether `viewer` is known: from the server's answer, or given when the page loaded. */
+	viewerKnown = $state(false);
 	/** A failed action, shown until dismissed. */
 	error = $state<string | null>(null);
 	/** Ticks every 30 seconds so relative times stay current. */
@@ -40,8 +42,13 @@ export class Threads {
 	/** The participants as last received, so an unchanged list does not wake every listener. */
 	private received = '[]';
 
-	constructor(api: Api) {
+	/** `viewer`: who is signed in, when the page already knows it; undefined to wait for the server. */
+	constructor(api: Api, viewer?: Viewer | null) {
 		this.api = api;
+		if (viewer !== undefined) {
+			this.viewer = viewer;
+			this.viewerKnown = true;
+		}
 	}
 
 	get unreadCount(): number {
@@ -72,6 +79,7 @@ export class Threads {
 				if (!response.ok) throw new Error();
 				const snapshot = (await response.json()) as CommentsSnapshot;
 				this.viewer = snapshot.viewer;
+				this.viewerKnown = true;
 				this.spaceName = snapshot.space.name;
 				// Keep replies that are still on their way to the server.
 				const pending = new Map(this.threads.map((t) => [t.id, t.comments.filter((c) => c.pending)]));
