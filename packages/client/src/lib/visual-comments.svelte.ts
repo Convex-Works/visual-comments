@@ -422,8 +422,26 @@ export class VisualComments {
 		on(view, 'mouseup', (event) => this.onRelease(event), capture);
 		on(view, 'click', (event) => this.onClick(event), capture);
 		for (const type of ['dblclick', 'auxclick', 'contextmenu'] as const) on(view, type, (event) => this.onOtherClick(event), capture);
+		// Escape closes the comments' own things before the page's (an open dialog) sees it; in the
+		// comment UI, after the UI's own handlers.
+		on(view, 'keydown', (event) => { if (!this.fromUs(event)) this.onEscape(event); }, capture);
 		on(view, 'keydown', (event) => this.onKey(event));
 		on(view, 'keyup', (event) => this.onKey(event));
+		// What happens in the comment UI is not the page's: a modal's focus trap (bits-ui, focus-trap, …)
+		// would take focus back from it, and a press or key in it would close the modal or work its
+		// shortcuts. Focus is stopped before any trap sees it, the rest where it leaves the UI.
+		on(view, 'focusin', (event) => { if (this.fromUs(event)) event.stopImmediatePropagation(); }, capture);
+		for (const type of ['keydown', 'keyup', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'focusout'] as const) {
+			const keep = (event: Event) => {
+				if (event instanceof KeyboardEvent) {
+					this.onEscape(event);
+					this.onKey(event);
+				}
+				event.stopPropagation();
+			};
+			this.host.addEventListener(type, keep);
+			this.cleanup.push(() => this.host.removeEventListener(type, keep));
+		}
 		on(view, 'resize', () => this.schedule());
 		on(view, 'hashchange', () => {
 			const id = hashPart('vc-connect');
@@ -459,7 +477,10 @@ export class VisualComments {
 		const view = frame.defaultView;
 		if (!view || this.frames.has(frame)) return;
 		const schedule = () => this.schedule();
-		const key = (event: KeyboardEvent) => this.onKey(event);
+		const key = (event: KeyboardEvent) => {
+			this.onEscape(event);
+			this.onKey(event);
+		};
 		const observer = new MutationObserver(schedule);
 		observer.observe(frame.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
 		frame.addEventListener('scroll', schedule, { capture: true, passive: true });
@@ -490,8 +511,10 @@ export class VisualComments {
 		const doc = this.doc;
 		this.surfaces = discover(doc, { ours: this.ours, documentOf: this.options.documentOf });
 		this.page = pageOf(this.options.page);
-		// A new comment on a surface that has gone, like a frame the viewer left, goes with it.
+		// A new comment on a surface that has gone, like a frame the viewer left, goes with it; an
+		// empty one also with its element, like a dialog's that closed.
 		if (this.draft && !this.surface(this.draft.surface)) this.draft = undefined;
+		if (this.draft?.target && !this.draft.target.element.isConnected && !this.draftHasContent) this.draft = undefined;
 
 		const docs = new Set(this.surfaces.map((surface) => surface.doc).filter((d): d is Document => Boolean(d) && d !== doc));
 		for (const frame of docs) this.watchFrame(frame);
@@ -661,25 +684,28 @@ export class VisualComments {
 			this.updateAim();
 			return;
 		}
-		if (event.type !== 'keydown' || event.defaultPrevented) return;
-		// The dialog to approve an agent keeps its keys to itself.
-		if (this.host.shadowRoot?.querySelector('dialog:modal')) return;
-		const target = event.composedPath()[0] as Element | undefined;
-		if (editable(target)) return;
-		if (event.key === 'Escape') {
-			if (this.host.shadowRoot?.querySelector(':popover-open') || this.doc.querySelector(':popover-open')) return;
-			if (this.draft) this.draft = undefined;
-			else if (this.openId !== undefined) this.openThread(undefined);
-			else if (this.active) this.toggle(false);
-			else return;
-			event.preventDefault();
-			return;
-		}
+		if (event.type !== 'keydown' || event.defaultPrevented || !this.ownsKey(event)) return;
 		const shortcut = this.options.shortcut ?? 'c';
 		if (shortcut && event.key.toLowerCase() === shortcut && !event.metaKey && !event.ctrlKey && !event.altKey) {
 			event.preventDefault();
 			this.toggle();
 		}
+	}
+
+	/** Escape drops the new comment, else closes the open thread, else leaves comment mode. */
+	private onEscape(event: KeyboardEvent) {
+		if (event.type !== 'keydown' || event.key !== 'Escape' || event.defaultPrevented || !this.ownsKey(event)) return;
+		if (this.host.shadowRoot?.querySelector(':popover-open') || this.doc.querySelector(':popover-open')) return;
+		if (this.draft) this.draft = undefined;
+		else if (this.openId !== undefined) this.openThread(undefined);
+		else if (this.active) this.toggle(false);
+		else return;
+		stop(event);
+	}
+
+	/** Whether a key is the comments' to act on: not typed into a field, nor into the dialog to approve an agent. */
+	private ownsKey(event: KeyboardEvent) {
+		return !this.host.shadowRoot?.querySelector('dialog:modal') && !editable(event.composedPath()[0] as Element | undefined);
 	}
 }
 
