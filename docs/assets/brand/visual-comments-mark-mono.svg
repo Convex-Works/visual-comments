@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img">
+  <title>visual-comments</title>
+  <g fill="currentColor">
+    <path d="M42.13 22H22A14 14 0 0 0 8 36V78A14 14 0 0 0 22 92H64A14 14 0 0 0 78 78V57.87A29 29 0 0 1 70 59H66.5V78A2.5 2.5 0 0 1 64 80.5H22A2.5 2.5 0 0 1 19.5 78V36A2.5 2.5 0 0 1 22 33.5H41V30A29 29 0 0 1 42.13 22Z"/>
+    <path d="M48 52V30A22 22 0 1 1 70 52Z"/>
+  </g>
+</svg>

@@ -1,0 +1,42 @@
+<!doctype html>
+<!--
+  visual-comments' GitHub README banner.
+  Render: open this file in Chromium at a 1280 × 840 viewport with
+  deviceScaleFactor 2 and screenshot #banner (gives docs/assets/visual-comments-banner.png).
+  The tagline uses Inter (installed, else rsms.me). The cards are crops of ../screenshots.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>visual-comments · GitHub banner</title>
+<style>
+  @font-face { font-family: Inter; src: local("Inter Variable"), local("Inter"), url("https://rsms.me/inter/font-files/InterVariable.woff2") format("woff2"); font-weight: 100 900; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ecece6; font-family: Inter, sans-serif; -webkit-font-smoothing: antialiased; }
+  #banner { position: relative; width: 1280px; height: 840px; overflow: hidden; background: #fff; }
+  .dots { position: absolute; inset: 250px 0 0 0;
+    background-image: radial-gradient(circle, #d6d3cd 1.1px, transparent 1.4px); background-size: 14px 14px;
+    -webkit-mask-image: radial-gradient(ellipse 70% 80% at 50% 100%, #000 30%, transparent 75%); }
+  .intro { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; padding-top: 58px; }
+  .lockup { height: 46px; }
+  .tagline { margin: 34px 0 0; font-size: 46px; font-weight: 560; letter-spacing: -0.035em; color: #171717; }
+  .card { position: absolute; border-radius: 12px; overflow: hidden; background-repeat: no-repeat;
+    box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 18px 48px -12px rgb(0 0 0 / .28); }
+  .canvas { left: 118px; top: 276px; width: 600px; height: 414px; background-image: url(../screenshots/canvas.png);
+    background-size: 960px 600px; background-position: -4px -4px; border: 1px solid #2a2a2a; }
+  .page { left: 566px; top: 322px; width: 600px; height: 434px; background-image: url(../screenshots/thread.png);
+    background-size: 1080px 675px; background-position: -394px -234px; border: 1px solid #e5e5e0; }
+</style>
+</head>
+<body>
+<div id="banner">
+  <div class="dots"></div>
+  <div class="intro">
+    <img class="lockup" src="visual-comments-lockup.svg" alt="visual-comments">
+    <p class="tagline">Comments pinned to any web page.</p>
+  </div>
+  <div class="card canvas"></div>
+  <div class="card page"></div>
+</div>
+</body>
+</html>
