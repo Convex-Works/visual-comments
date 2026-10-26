@@ -1,6 +1,6 @@
 {
 	"name": "visual-comments",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Comments pinned to the elements of any web page or app, with one comment server for every site.",
 	"keywords": [
 		"comments",
