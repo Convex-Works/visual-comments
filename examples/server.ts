@@ -3,7 +3,7 @@
 // space's secret. Without OIDC settings, it signs in with any name.
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { createSignIn } from '@convex-works/sign-in/server';
+import { createSignIn } from '@cnvx/sign-in/server';
 import { commentsProxy } from 'visual-comments/server';
 import { file } from '../packages/server/src/app.ts';
 import { serve } from '../packages/server/src/http.ts';

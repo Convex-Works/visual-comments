@@ -30,14 +30,14 @@ The server's `dev` script uses `SPACES=spaces.dev.json` and
 
 The examples site (`examples/server.ts`) has its own server, as real sites
 do: it signs people in with
-[@convex-works/sign-in](https://git.convex.works/ConvexWorks/sign-in), with any
+[@cnvx/sign-in](https://git.convex.works/ConvexWorks/sign-in), with any
 name unless `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `SESSION_SECRET` are set
 (`OIDC_ISSUER` defaults to `https://id.convex.works`), and passes comment
 requests on to the `demo` space of `packages/server/spaces.dev.json`.
 `COMMENTS_SERVER` sets the comment server (default `http://localhost:4400`).
 
 It expects the sign-in repository next to this one: `examples/package.json`
-links `@convex-works/sign-in` from `../../sign-in`.
+links `@cnvx/sign-in` from `../../sign-in`.
 
 Without OIDC settings, sign in by visiting
 `/auth/login?name=Maya%20Chen&returnTo=/`. Use different names to get several

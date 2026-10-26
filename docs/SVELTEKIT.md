@@ -64,7 +64,7 @@ every request on:
 
 ```ts
 import { sequence } from '@sveltejs/kit/hooks';
-import { createSignIn } from '@convex-works/sign-in/server';
+import { createSignIn } from '@cnvx/sign-in/server';
 import { comments } from '#lib/server/comments.js';
 
 export const handle = sequence(createSignIn({ /* … */ }).sveltekit(), comments.sveltekit());
@@ -138,7 +138,7 @@ has started, e.g. for `current.unreadCount` or `current.participants`.
 When the app's accounts are not the people who comment, say the app's
 customers sign in with its own system and the team reviewing it with
 id.convex.works, the comments sign people in themselves, with
-[@convex-works/sign-in](https://git.convex.works/ConvexWorks/sign-in) (`pnpm add @convex-works/sign-in`):
+[@cnvx/sign-in](https://git.convex.works/ConvexWorks/sign-in) (`pnpm add @cnvx/sign-in`):
 
 ```ts
 export const comments = commentsFromEnv(env, { dev, signIn: true });

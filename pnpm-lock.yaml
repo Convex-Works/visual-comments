@@ -168,7 +168,7 @@ importers:
 
   examples:
     dependencies:
-      '@convex-works/sign-in':
+      '@cnvx/sign-in':
         specifier: link:../../sign-in
         version: link:../../sign-in
       visual-comments:
@@ -177,7 +177,7 @@ importers:
 
   examples/sveltekit:
     devDependencies:
-      '@convex-works/sign-in':
+      '@cnvx/sign-in':
         specifier: link:../../../sign-in
         version: link:../../../sign-in
       '@sveltejs/adapter-node':
@@ -207,7 +207,7 @@ importers:
 
   packages/client:
     devDependencies:
-      '@convex-works/sign-in':
+      '@cnvx/sign-in':
         specifier: link:../../../sign-in
         version: link:../../../sign-in
       '@sveltejs/kit':

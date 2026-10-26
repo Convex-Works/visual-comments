@@ -13,7 +13,7 @@ export interface VisualCommentsOptions {
 	/** Where the site's server passes comment requests on to the comment server. Default `/_comments`. */
 	endpoint?: string;
 	/**
-	 * The site's sign-in: the path of its routes, as in `@convex-works/sign-in`
+	 * The site's sign-in: the path of its routes, as in `@cnvx/sign-in`
 	 * (default `/auth`), or functions that sign in and out.
 	 */
 	auth?: string | { signIn(): void; signOut(): void };

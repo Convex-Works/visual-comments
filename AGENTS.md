@@ -9,7 +9,7 @@ Notes for agents and maintainers working in this repository.
 - `pnpm build` builds the client library and the widget bundle
   (`packages/client/dist-widget/visual-comments.js`); the comment server
   serves that bundle, so build before starting it.
-- The examples site links `@convex-works/sign-in` from `../../sign-in`
+- The examples site links `@cnvx/sign-in` from `../../sign-in`
   (`examples/package.json`): it needs the
   [sign-in repository](https://git.convex.works/ConvexWorks/sign-in) checked
   out next to this one. So does `packages/client` (a dev dependency, for

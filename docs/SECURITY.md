@@ -4,7 +4,7 @@ The comment server has no sign-in of its own. It trusts the site's server,
 which proves itself with the space's secret and names the person in each
 request ([PROTOCOL.md](PROTOCOL.md)). So the site decides who may see and write
 comments, and its session (an HttpOnly cookie, with
-[@convex-works/sign-in](https://git.convex.works/ConvexWorks/sign-in)) is the
+[@cnvx/sign-in](https://git.convex.works/ConvexWorks/sign-in)) is the
 only one: signing in or out of the site does the same for its comments. A
 request without a person (or an agent) sees no threads and cannot write.
 

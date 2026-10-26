@@ -43,12 +43,12 @@ environment variables: see [SvelteKit](docs/SVELTEKIT.md).
 
 1. **Add a proxy route to the site's server.** It passes `/_comments/*` on to
    the comment server with the space's secret and the signed-in person. With
-   SvelteKit and [@convex-works/sign-in](https://git.convex.works/ConvexWorks/sign-in):
+   SvelteKit and [@cnvx/sign-in](https://git.convex.works/ConvexWorks/sign-in):
 
    ```ts
    // src/hooks.server.ts
    import { sequence } from '@sveltejs/kit/hooks';
-   import { createSignIn } from '@convex-works/sign-in/server';
+   import { createSignIn } from '@cnvx/sign-in/server';
    import { commentsProxy } from 'visual-comments/server';
 
    const signIn = createSignIn({ issuer, clientId, clientSecret, secret });

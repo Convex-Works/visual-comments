@@ -1,4 +1,4 @@
-import { createSignIn } from '@convex-works/sign-in/server';
+import { createSignIn } from '@cnvx/sign-in/server';
 import { sequence } from '@sveltejs/kit/hooks';
 import { comments } from '#lib/server/comments.js';
 

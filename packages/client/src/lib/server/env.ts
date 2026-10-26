@@ -4,7 +4,7 @@
 // never loads the comments' code. (To leave them out of a build altogether, see
 // `visual-comments/vite`.)
 
-import type * as SignInModule from '@convex-works/sign-in/server';
+import type * as SignInModule from '@cnvx/sign-in/server';
 import type { Viewer } from '../shared/types.js';
 import { commentsProxy, type CommentsUser, type Handle } from './index.js';
 import { invalid, read, type CommentsEnv, type CommentsEnvName } from './variables.js';
@@ -29,7 +29,7 @@ export interface CommentsEnvOptions {
 	dev?: boolean;
 	/**
 	 * Sign people in to the comments apart from the site's own accounts, with
-	 * `@convex-works/sign-in` (install it beside this package): at the provider of
+	 * `@cnvx/sign-in` (install it beside this package): at the provider of
 	 * the `VISUAL_COMMENTS_OIDC_*` variables, or, while the dev server runs without
 	 * them, with any name on localhost. Its routes are at `VISUAL_COMMENTS_AUTH`;
 	 * its session is the `visual_comments_session` cookie. Without it, the site's
@@ -126,12 +126,12 @@ export function commentsFromEnv(env: CommentsEnv, options: CommentsEnvOptions = 
 	const devHosts = typeof options.signIn === 'object' ? options.signIn.devHosts : undefined;
 	let module: Promise<{ signIn: SignInModule.SignIn; withCookies: typeof SignInModule.withCookies }> | undefined;
 	// Loaded on the first request, so sites without it can use the rest of this module.
-	const load = () => (module ??= import('@convex-works/sign-in/server').then(
+	const load = () => (module ??= import('@cnvx/sign-in/server').then(
 		({ createSignIn, withCookies }) => ({
 			signIn: createSignIn({ issuer, clientId, clientSecret, secret, path: auth, cookie: COOKIE, devLogin: !provider, devHosts }),
 			withCookies
 		}),
-		(error) => { throw new Error('The comments’ own sign-in needs @convex-works/sign-in: install it beside visual-comments.', { cause: error }); }
+		(error) => { throw new Error('The comments’ own sign-in needs @cnvx/sign-in: install it beside visual-comments.', { cause: error }); }
 	));
 
 	// One check per request: the layout's `load` and the hook share it, and the hook sets the

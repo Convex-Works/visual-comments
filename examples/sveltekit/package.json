@@ -14,7 +14,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"devDependencies": {
-		"@convex-works/sign-in": "link:../../../sign-in",
+		"@cnvx/sign-in": "link:../../../sign-in",
 		"@sveltejs/adapter-node": "^6.0.0",
 		"@sveltejs/kit": "^3.1.0",
 		"@sveltejs/vite-plugin-svelte": "^7.2.0",

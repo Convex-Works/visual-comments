@@ -8,7 +8,7 @@
 		"dev": "node --watch server.ts"
 	},
 	"dependencies": {
-		"@convex-works/sign-in": "link:../../sign-in",
+		"@cnvx/sign-in": "link:../../sign-in",
 		"visual-comments": "workspace:*"
 	}
 }
