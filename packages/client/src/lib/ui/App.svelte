@@ -56,8 +56,10 @@
 
 	{#if vc.active}
 		<Panel
-			class={panel ? 'absolute z-20' : 'absolute top-3 right-3 bottom-3 z-20 w-80'}
-			style={panel ? `left:${panel.left}px;top:${panel.top}px;width:${panel.right - panel.left}px;height:${panel.bottom - panel.top}px` : ''}
+			class={panel ? 'absolute z-20' : vc.panelCollapsed ? 'absolute top-3 right-3 z-20 w-40' : 'absolute top-3 right-3 bottom-3 z-20 w-80'}
+			style={panel ? vc.panelCollapsed
+				? `left:${Math.max(panel.left, panel.right - 160)}px;top:${panel.top}px;width:${Math.min(160, panel.right - panel.left)}px;height:46px`
+				: `left:${panel.left}px;top:${panel.top}px;width:${panel.right - panel.left}px;height:${panel.bottom - panel.top}px` : ''}
 			onselect={(thread) => vc.focus(thread)}
 			onclose={() => vc.toggle(false)}
 		/>

@@ -104,8 +104,10 @@ export class VisualComments {
 	readonly store: Threads;
 	options = $state.raw<VisualCommentsOptions>() as VisualCommentsOptions;
 
-	/** Comment mode: the list is shown, and clicking a surface starts a thread. Pins always show. */
+	/** Comment mode: clicking a surface starts a thread. Pins always show. */
 	active = $state(false);
+	/** Hide the list while keeping comment mode active. */
+	panelCollapsed = $state(false);
 	/** The thread whose conversation is open. */
 	openId = $state<number | undefined>();
 	draft = $state<Draft | undefined>();
@@ -233,6 +235,7 @@ export class VisualComments {
 
 	toggle(on = !this.active) {
 		this.active = on;
+		if (!on) this.panelCollapsed = false;
 		this.cursor = undefined;
 		this.aim = undefined;
 		if (!on) {

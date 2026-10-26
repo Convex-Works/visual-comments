@@ -46,7 +46,7 @@
 
 	/** Where cards on a surface can go: its stage, clear of the list. */
 	function stageOf(surface: Surface): Rect {
-		const panel = vc.active ? vc.panelRect ?? floatingPanel() : undefined;
+		const panel = vc.active && !vc.panelCollapsed ? vc.panelRect ?? floatingPanel() : undefined;
 		const stage = intersect(surface.stage, { left: 0, top: 0, right: innerWidth, bottom: innerHeight });
 		return panel && panel.left < stage.right && panel.left > stage.left ? { ...stage, right: panel.left } : stage;
 	}
